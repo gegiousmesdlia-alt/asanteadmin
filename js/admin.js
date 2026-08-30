@@ -347,7 +347,7 @@ function openReviewModal(review) {
       <div class="field"><label>Rating</label>
         <select id="r-rating">${[5,4,3,2,1].map(n => `<option value="${n}" ${review?.rating===n?"selected":""}>${n} star${n>1?"s":""}</option>`).join("")}</select>
       </div>
-      <div class="field"><label>Property (optional)</label><input id="r-property" value="${review?.propertyLabel || ""}" placeholder="e.g. 3-bed apartment, Maitama"></div>
+      <div class="field"><label>Property (optional)</label><input id="r-property" value="${review?.propertyLabel || ""}" placeholder="e.g. 2-bed apartment, Austin"></div>
       <div class="field"><label>Review text</label><textarea id="r-text">${review?.text || ""}</textarea></div>
       <label style="display:flex; align-items:center; gap:8px; font-family:var(--font-mono); font-size:0.78rem; margin-bottom:16px;">
         <input type="checkbox" id="r-approved" ${review?.approved !== false ? "checked" : ""}> Publish immediately
@@ -403,34 +403,34 @@ async function seedDemoReviews() {
 
   const demoReviews = [
     {
-      displayName: "Adaeze O.", rating: 5, propertyLabel: "3-bed apartment, Maitama",
+      displayName: "Diane R.", rating: 5, propertyLabel: "2-bed apartment, Austin, TX",
       text: "The apartment I bought is exactly the way it was described and the surroundings are peaceful — it matches the quiet I wanted for this stage of life. The only reason I'm not at five stars on speed is the paperwork took a little longer than I expected, but the team kept me updated the whole way.",
       approved: true, verified: true, demo: true,
-      adminReply: "Thank you, Adaeze — glad Maitama has been everything you hoped for. We're working on tightening our paperwork turnaround."
+      adminReply: "Thank you, Diane — glad the place has been everything you hoped for. We're working on tightening our paperwork turnaround."
     },
     {
-      displayName: "Tunde A.", rating: 4, propertyLabel: "2-bed flat, Wuse II",
+      displayName: "Marcus T.", rating: 4, propertyLabel: "1-bed unit, Denver, CO",
       text: "Good experience overall. The agent was responsive and the viewing was easy to book. I did have a small mix-up with the initial booking fee receipt but it was sorted within a day once I raised it.",
       approved: true, verified: true, demo: true, adminReply: ""
     },
     {
-      displayName: "Ngozi E.", rating: 5, propertyLabel: "4-bed duplex, Guzape",
+      displayName: "Karen L.", rating: 5, propertyLabel: "3-bed townhome, Phoenix, AZ",
       text: "This is my second purchase through this agency and both times the title verification gave me real peace of mind before I paid anything. The BTC payment option was a nice surprise too — settled the booking fee in about twenty minutes.",
       approved: true, verified: true, demo: true, adminReply: ""
     },
     {
-      displayName: "Ibrahim S.", rating: 3, propertyLabel: "Studio apartment, Jabi",
-      text: "The property itself is fine and matches the listing photos. What I'd flag for others is that the estate's power backup wasn't mentioned upfront and I had to ask directly. Would appreciate more detail on utilities in future listings.",
-      approved: true, verified: true, demo: true, adminReply: "Fair point, Ibrahim — we're updating our listing template to include utilities and backup power as standard fields."
+      displayName: "Steven B.", rating: 3, propertyLabel: "Studio apartment, Tampa, FL",
+      text: "The unit itself is fine and matches the listing photos. What I'd flag for others is that the building's parking situation wasn't mentioned upfront and I had to ask directly. Would appreciate more detail on amenities in future listings.",
+      approved: true, verified: true, demo: true, adminReply: "Fair point, Steven — we're updating our listing template to include parking and amenities as standard fields."
     },
     {
-      displayName: "Chiamaka U.", rating: 4, propertyLabel: "3-bed bungalow, Gwarinpa",
+      displayName: "Patricia N.", rating: 4, propertyLabel: "2-bed condo, Charlotte, NC",
       text: "I have a few names I'd like to correct on my documentation — do I still need your office for that, or should I go through a separate legal service to get it amended?",
       approved: true, verified: true, demo: true,
-      adminReply: "You can start with us, Chiamaka — send the correction request to hello@asanteandgrove.example and we'll tell you whether it's something our office handles directly or where to go if it needs outside legal input."
+      adminReply: "You can start with us, Patricia — send the correction request to hello@asanteandgrove.example and we'll tell you whether it's something our office handles directly or where to go if it needs outside legal input."
     },
     {
-      displayName: "Femi K.", rating: 5, propertyLabel: "1-bed apartment for rent, Lekki",
+      displayName: "Gerald M.", rating: 5, propertyLabel: "1-bed apartment for rent, Raleigh, NC",
       text: "Renting through here was much smoother than I expected. Clear lease terms, no hidden charges, and the agent actually showed up on time for the viewing — which apparently is rare.",
       approved: true, verified: true, demo: true, adminReply: ""
     }
