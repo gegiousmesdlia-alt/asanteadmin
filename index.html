@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="robots" content="noindex, nofollow">
+<title>Admin — Asante & Grove</title>
+<link rel="stylesheet" href="css/admin.css">
+</head>
+<body>
+
+<!-- LOGIN SCREEN -->
+<div class="login-screen" id="login-screen">
+  <form class="login-card" id="login-form">
+    <div class="admin-brand">Asante &amp; Grove<small>Backstage</small></div>
+    <div class="field" style="margin-top:20px;"><label for="a-email">Email</label><input id="a-email" type="email" required></div>
+    <div class="field"><label for="a-pass">Password</label><input id="a-pass" type="password" required></div>
+    <button class="btn" style="width:100%;" type="submit">Sign in</button>
+    <p id="login-error" style="color:var(--rust); font-family:var(--font-mono); font-size:0.78rem; margin-top:12px; display:none;"></p>
+  </form>
+</div>
+
+<!-- DASHBOARD (hidden until authenticated + whitelisted) -->
+<div id="dashboard" style="display:none;">
+  <header class="admin-header">
+    <div class="admin-brand">Asante &amp; Grove<small>Backstage</small></div>
+    <button class="btn outline small" id="logout-btn">Sign out</button>
+  </header>
+  <div class="layout">
+    <nav class="sidebar">
+      <button class="tab-btn active" data-tab="listings">Listings</button>
+      <button class="tab-btn" data-tab="agents">Agents</button>
+      <button class="tab-btn" data-tab="enquiries">Enquiries</button>
+      <button class="tab-btn" data-tab="bookings">Bookings &amp; BTC</button>
+      <button class="tab-btn" data-tab="reviews">Reviews</button>
+    </nav>
+    <main class="main" id="main">
+      <!-- panels injected by admin.js -->
+    </main>
+  </div>
+</div>
+
+<script type="module" src="js/firebase-config.js"></script>
+<script type="module" src="js/admin.js"></script>
+</body>
+</html>
