@@ -533,8 +533,19 @@ async function seedDemoReviews() {
     }
   ];
 
+  let succeeded = 0;
+  let firstError = null;
   for (const r of demoReviews) {
-    await addDoc(collection(db, "reviews"), { ...r, createdAt: serverTimestamp() });
+    try {
+      await addDoc(collection(db, "reviews"), { ...r, createdAt: serverTimestamp() });
+      succeeded++;
+    } catch (err) {
+      firstError = err;
+      break; // stop on first failure — almost always means every remaining write will fail the same way (e.g. rules)
+    }
+  }
+  if (firstError) {
+    alert(`Only ${succeeded} of ${demoReviews.length} demo reviews were saved before this error:\n\n${firstError.message}\n\nThis usually means firestore.rules hasn't been published with the current "reviews" match block, or you're not signed in as an admin.`);
   }
   renderReviews();
 }
