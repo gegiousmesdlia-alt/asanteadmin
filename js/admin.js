@@ -1,7 +1,7 @@
-import { auth, db, CLOUDINARY_CLOUD_NAME, CLOUDINARY_UPLOAD_PRESET } from "./firebase-config.js";
+import { auth, db, CLOUDINARY_CLOUD_NAME, CLOUDINARY_UPLOAD_PRESET, PUBLIC_SITE_BASE_URL } from "./firebase-config.js";
 import { signInWithEmailAndPassword, signOut, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
 import {
-  collection, addDoc, updateDoc, deleteDoc, doc, getDoc, getDocs, orderBy, query, where, serverTimestamp, setDoc
+  collection, addDoc, updateDoc, deleteDoc, doc, getDoc, getDocs, orderBy, query, where, serverTimestamp, setDoc, onSnapshot
 } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
 
 const loginScreen = document.getElementById("login-screen");
@@ -37,6 +37,7 @@ onAuthStateChanged(auth, async (user) => {
   }
   loginScreen.style.display = "none";
   dashboard.style.display = "block";
+  document.getElementById("signed-in-as").textContent = `Signed in as: ${user.email}`;
   renderTab("listings");
 });
 
@@ -55,6 +56,7 @@ function renderTab(tab) {
   if (tab === "enquiries") return renderEnquiries();
   if (tab === "bookings") return renderBookings();
   if (tab === "reviews") return renderReviews();
+  if (tab === "messages") return renderMessages();
   if (tab === "settings") return renderSettings();
 }
 
@@ -596,6 +598,42 @@ async function renderSettings() {
         <button class="btn" id="save-key">Save key</button>
       </div>
       <p id="key-status" style="font-family:var(--font-mono); font-size:0.78rem; margin-top:14px;"></p>
+    </div>
+
+    <div class="panel" style="max-width:560px; margin-top:24px;">
+      <h3 style="margin:0 0 6px; font-family:var(--font-body); font-weight:600; text-transform:none; font-size:1.05rem;">Saved nationwide listings</h3>
+      <p style="font-family:var(--font-mono); font-size:0.78rem; color:var(--muted); margin:0 0 18px;">
+        Every nationwide search result stays saved permanently (in Firestore) once fetched — repeat searches for
+        the same place are served from that saved copy instead of spending another RealtyAPI credit. That also means
+        results can go stale over time. Use this to wipe everything saved and force fresh results on the next search.
+      </p>
+      <button class="btn danger" id="reset-cache-btn">Reset saved nationwide listings</button>
+      <p id="reset-cache-status" style="font-family:var(--font-mono); font-size:0.78rem; margin-top:14px;"></p>
+    </div>
+
+    <div class="panel" style="max-width:560px; margin-top:24px;">
+      <h3 style="margin:0 0 6px; font-family:var(--font-body); font-weight:600; text-transform:none; font-size:1.05rem;">Site info</h3>
+      <p style="font-family:var(--font-mono); font-size:0.78rem; color:var(--muted); margin:0 0 18px;">
+        Shown across the public site — business name/tagline in the header, contact details, and the site owner's info visitors can reach out to.
+      </p>
+      <div class="form-grid">
+        <div class="field"><label>Business name</label><input id="site-name" placeholder="Asante & Grove"></div>
+        <div class="field"><label>Header tagline</label><input id="site-tagline" placeholder="Est. Registry No. 0119"></div>
+        <div class="field"><label>Contact email</label><input id="site-email" type="email" placeholder="hello@example.com"></div>
+        <div class="field"><label>Contact phone</label><input id="site-phone" placeholder="(555) 123-4567"></div>
+        <div class="field"><label>Office address</label><input id="site-address" placeholder="Denver, CO"></div>
+        <div class="field"><label>Owner name</label><input id="owner-name" placeholder="Victor"></div>
+        <div class="field"><label>Owner email</label><input id="owner-email" type="email" placeholder="owner@example.com"></div>
+      </div>
+      <div class="field"><label>Owner bio (shown when a visitor clicks the owner photo on the homepage)</label><textarea id="owner-bio" placeholder="A short line about the owner"></textarea></div>
+      <div class="field"><label>Owner photo</label><input id="owner-photo-input" type="file" accept="image/*"></div>
+      <p style="font-family:var(--font-mono); font-size:0.72rem; color:var(--muted); margin:-8px 0 16px;">
+        We intentionally do NOT include an owner home address field — publishing a real person's home address
+        publicly is a safety risk (it's a common starting point for harassment/stalking), regardless of whose
+        site it is. The owner's public-facing location on the site is the office address above.
+      </p>
+      <button class="btn" id="save-site-info">Save site info</button>
+      <p id="site-info-status" style="font-family:var(--font-mono); font-size:0.78rem; margin-top:14px;"></p>
     </div>`;
 
   // --- discount ---
@@ -681,4 +719,199 @@ async function renderSettings() {
       statusEl.textContent = "Could not remove: " + err.message;
     }
   });
+
+  // --- reset saved nationwide listings ---
+  document.getElementById("reset-cache-btn").addEventListener("click", async () => {
+    if (!confirm("Wipe every saved nationwide search result? The next search for any location will fetch fresh from RealtyAPI (spending a credit) instead of using a saved copy.")) return;
+    const statusEl2 = document.getElementById("reset-cache-status");
+    statusEl2.textContent = "Resetting…";
+    try {
+      const idToken = await auth.currentUser.getIdToken();
+      const res = await fetch(`${PUBLIC_SITE_BASE_URL}/api/admin/reset-external-cache`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${idToken}` }
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Reset failed");
+      statusEl2.textContent = `Done — cleared ${data.deleted} saved result${data.deleted === 1 ? "" : "s"}.`;
+    } catch (err) {
+      statusEl2.textContent = "Could not reset: " + err.message + " (check PUBLIC_SITE_BASE_URL in admin/js/firebase-config.js matches your deployed public site URL)";
+    }
+  });
+
+  // --- site info ---
+  let currentOwnerPhoto = "";
+  try {
+    const siteSnap = await getDoc(doc(db, "settings", "site"));
+    const site = siteSnap.exists() ? siteSnap.data() : {};
+    document.getElementById("site-name").value = site.businessName || "";
+    document.getElementById("site-tagline").value = site.tagline || "";
+    document.getElementById("site-email").value = site.contactEmail || "";
+    document.getElementById("site-phone").value = site.contactPhone || "";
+    document.getElementById("site-address").value = site.officeAddress || "";
+    document.getElementById("owner-name").value = site.ownerName || "";
+    document.getElementById("owner-email").value = site.ownerEmail || "";
+    document.getElementById("owner-bio").value = site.ownerBio || "";
+    currentOwnerPhoto = site.ownerPhoto || "";
+  } catch (err) {
+    console.error("Could not load site info:", err);
+  }
+
+  document.getElementById("save-site-info").addEventListener("click", async (e) => {
+    const statusEl3 = document.getElementById("site-info-status");
+    const btn = e.currentTarget;
+    btn.disabled = true;
+    statusEl3.textContent = "Saving…";
+    try {
+      const photoFile = document.getElementById("owner-photo-input").files[0];
+      const ownerPhoto = photoFile ? await uploadToCloudinary(photoFile) : currentOwnerPhoto;
+      await setDoc(doc(db, "settings", "site"), {
+        businessName: document.getElementById("site-name").value,
+        tagline: document.getElementById("site-tagline").value,
+        contactEmail: document.getElementById("site-email").value,
+        contactPhone: document.getElementById("site-phone").value,
+        officeAddress: document.getElementById("site-address").value,
+        ownerName: document.getElementById("owner-name").value,
+        ownerEmail: document.getElementById("owner-email").value,
+        ownerBio: document.getElementById("owner-bio").value,
+        ownerPhoto
+      }, { merge: true });
+      statusEl3.textContent = "Saved.";
+    } catch (err) {
+      statusEl3.textContent = "Could not save: " + err.message;
+    } finally {
+      btn.disabled = false;
+    }
+  });
+}
+
+// ---------- Messages (general visitor<->admin chat + per-listing threads) ----------
+// Groups the flat "messages" collection into threads by threadId. threadId
+// encodes both the kind (general vs listing) and whether the sender is a
+// guest or a registered user (see js/messaging.js: threadId is built from
+// either a persistent guest ID or the user's uid).
+let messagesUnsub = null;
+
+function threadMeta(threadId, msgs) {
+  const first = msgs[0];
+  const last = msgs[msgs.length - 1];
+  const isGeneral = threadId.startsWith("general-");
+  return {
+    threadId,
+    kind: isGeneral ? "general" : "listing",
+    listingLabel: first?.listingLabel || null,
+    senderType: first?.senderType === "admin" ? (msgs.find(m => m.senderType !== "admin")?.senderType || "guest") : first?.senderType,
+    senderName: first?.senderType === "admin" ? (msgs.find(m => m.senderType !== "admin")?.senderName || "Visitor") : first?.senderName,
+    senderEmail: first?.senderEmail || msgs.find(m => m.senderEmail)?.senderEmail || null,
+    lastText: last?.text || "",
+    lastAt: last?.createdAt,
+    unread: msgs.some(m => m.senderType !== "admin" && !m.read)
+  };
+}
+
+async function renderMessages() {
+  main.innerHTML = `
+    <h1>Messages</h1>
+    <div style="display:grid; grid-template-columns: 320px 1fr; gap:20px; align-items:start;">
+      <div class="panel" style="padding:0; max-height:70vh; overflow-y:auto;">
+        <div id="thread-list"><p style="padding:16px; font-family:var(--font-mono); font-size:0.8rem; color:var(--muted);">Loading…</p></div>
+      </div>
+      <div class="panel" id="thread-detail" style="min-height:300px;">
+        <p style="font-family:var(--font-mono); font-size:0.85rem; color:var(--muted);">Select a conversation to view it.</p>
+      </div>
+    </div>`;
+
+  if (messagesUnsub) messagesUnsub();
+
+  const threadListEl = document.getElementById("thread-list");
+  let activeThreadId = null;
+
+  messagesUnsub = onSnapshot(query(collection(db, "messages"), orderBy("createdAt", "asc")), (snap) => {
+    const all = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    const byThread = {};
+    all.forEach(m => { (byThread[m.threadId] ||= []).push(m); });
+
+    const threads = Object.entries(byThread)
+      .map(([id, msgs]) => threadMeta(id, msgs))
+      .sort((a, b) => (b.lastAt?.toMillis?.() || 0) - (a.lastAt?.toMillis?.() || 0));
+
+    threadListEl.innerHTML = threads.length ? threads.map(t => `
+      <div class="thread-row ${t.threadId === activeThreadId ? "active" : ""}" data-thread="${t.threadId}" style="padding:14px 16px; border-bottom:1px solid var(--line); cursor:pointer; ${t.threadId === activeThreadId ? "background:var(--panel-2);" : ""}">
+        <div style="display:flex; justify-content:space-between; align-items:center; gap:8px;">
+          <strong style="font-size:0.9rem;">${t.senderName || "Visitor"}</strong>
+          <span class="badge ${t.senderType === "user" ? "paid" : ""}" style="font-size:0.62rem;">${t.senderType === "user" ? "Registered" : "Guest"}</span>
+        </div>
+        <div style="font-family:var(--font-mono); font-size:0.72rem; color:var(--muted); margin-top:3px;">${t.kind === "listing" ? `Re: ${t.listingLabel || "a listing"}` : "General"}</div>
+        <div style="font-size:0.82rem; color:var(--muted); margin-top:4px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${t.lastText}${t.unread ? ' <span style="color:var(--rust);">●</span>' : ""}</div>
+      </div>
+    `).join("") : `<p style="padding:16px; font-family:var(--font-mono); font-size:0.8rem; color:var(--muted);">No messages yet.</p>`;
+
+    threadListEl.querySelectorAll(".thread-row").forEach(row => {
+      row.addEventListener("click", () => openThread(row.dataset.thread, byThread[row.dataset.thread]));
+    });
+
+    // Keep the open thread's transcript live-updated too.
+    if (activeThreadId && byThread[activeThreadId]) {
+      renderThreadDetail(activeThreadId, byThread[activeThreadId]);
+    }
+  });
+
+  function openThread(threadId, msgs) {
+    activeThreadId = threadId;
+    document.querySelectorAll(".thread-row").forEach(r => r.classList.toggle("active", r.dataset.thread === threadId));
+    renderThreadDetail(threadId, msgs);
+    // mark incoming messages as read
+    msgs.filter(m => m.senderType !== "admin" && !m.read).forEach(m => updateDoc(doc(db, "messages", m.id), { read: true }).catch(() => {}));
+  }
+
+  function renderThreadDetail(threadId, msgs) {
+    const detail = document.getElementById("thread-detail");
+    const meta = threadMeta(threadId, msgs);
+    detail.innerHTML = `
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:14px;">
+        <div>
+          <h3 style="text-transform:none; font-family:var(--font-body); font-size:1.05rem; margin:0;">${meta.senderName || "Visitor"}
+            <span class="badge ${meta.senderType === "user" ? "paid" : ""}" style="font-size:0.62rem; margin-left:6px;">${meta.senderType === "user" ? "Registered" : "Guest"}</span>
+          </h3>
+          <p style="font-family:var(--font-mono); font-size:0.76rem; color:var(--muted); margin:4px 0 0;">
+            ${meta.kind === "listing" ? `About: ${meta.listingLabel || "a listing"}` : "General enquiry"}
+            ${meta.senderEmail ? ` · ${meta.senderEmail}` : ""}
+          </p>
+        </div>
+      </div>
+      <div id="thread-transcript" style="max-height:360px; overflow-y:auto; display:flex; flex-direction:column; gap:8px; margin-bottom:14px;">
+        ${msgs.map(m => `
+          <div style="align-self:${m.senderType === "admin" ? "flex-end" : "flex-start"}; max-width:80%; padding:9px 12px; font-size:0.87rem; background:${m.senderType === "admin" ? "var(--brass)" : "var(--panel-2)"}; color:${m.senderType === "admin" ? "var(--ink)" : "var(--parchment)"};">
+            ${m.text}
+          </div>`).join("")}
+      </div>
+      <form id="reply-form" style="display:flex; gap:8px;">
+        <input id="reply-input" type="text" placeholder="Reply…" style="flex:1; padding:10px 12px; background:var(--panel-2); border:1px solid var(--line); color:var(--parchment);">
+        <button class="btn" type="submit">Send</button>
+      </form>`;
+
+    const transcriptEl = document.getElementById("thread-transcript");
+    transcriptEl.scrollTop = transcriptEl.scrollHeight;
+
+    document.getElementById("reply-form").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const input = document.getElementById("reply-input");
+      const text = input.value.trim();
+      if (!text) return;
+      input.value = "";
+      await addDoc(collection(db, "messages"), {
+        threadId,
+        kind: meta.kind,
+        listingId: msgs[0]?.listingId || null,
+        listingLabel: msgs[0]?.listingLabel || null,
+        senderType: "admin",
+        senderId: "admin",
+        senderName: "Asante & Grove",
+        senderEmail: null,
+        text,
+        createdAt: serverTimestamp(),
+        read: true
+      });
+    });
+  }
 }

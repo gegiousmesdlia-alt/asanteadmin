@@ -77,3 +77,4 @@ a{ color:inherit; }
 .badge.demo{ color: var(--rust); border-color: var(--rust); }
 .stars-admin{ color: var(--brass); letter-spacing: 1px; }
 .review-reply-box textarea{ min-height: 80px; }
+.thread-row:hover{ background: var(--panel-2); }

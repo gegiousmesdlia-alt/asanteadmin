@@ -22,3 +22,11 @@ export const db = getFirestore(app);
 // TODO: replace with your real Cloudinary cloud name + unsigned upload preset
 export const CLOUDINARY_CLOUD_NAME = "dbgxllxdb";
 export const CLOUDINARY_UPLOAD_PRESET = "efootball_screenshots";
+
+// The PUBLIC SITE's deployed URL — needed because this admin panel is a
+// separate Vercel project with no /api functions of its own. Actions that
+// require a serverless function (like resetting the nationwide listings
+// cache) call the public site's domain instead.
+// TODO: replace with your real public site URL once deployed, e.g.
+// "https://asante-public-site.vercel.app" (no trailing slash).
+export const PUBLIC_SITE_BASE_URL = "https://asante-public-site.vercel.app";
