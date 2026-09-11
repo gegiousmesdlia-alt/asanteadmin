@@ -1,7 +1,7 @@
 import { auth, db, CLOUDINARY_CLOUD_NAME, CLOUDINARY_UPLOAD_PRESET, PUBLIC_SITE_BASE_URL } from "./firebase-config.js";
 import { signInWithEmailAndPassword, signOut, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
 import {
-  collection, addDoc, updateDoc, deleteDoc, doc, getDoc, getDocs, orderBy, query, where, serverTimestamp, setDoc, onSnapshot
+  collection, addDoc, updateDoc, deleteDoc, doc, getDoc, getDocs, orderBy, query, where, serverTimestamp, setDoc, onSnapshot, deleteField
 } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
 
 const loginScreen = document.getElementById("login-screen");
@@ -585,18 +585,20 @@ async function renderSettings() {
       <p id="discount-status" style="font-family:var(--font-mono); font-size:0.78rem; margin-top:14px;"></p>
     </div>
 
-    <div class="panel" style="max-width:560px;">
-      <h3 style="margin:0 0 6px; font-family:var(--font-body); font-weight:600; text-transform:none; font-size:1.05rem;">RealtyAPI.io key</h3>
+    <div class="panel" style="max-width:640px;">
+      <h3 style="margin:0 0 6px; font-family:var(--font-body); font-weight:600; text-transform:none; font-size:1.05rem;">RealtyAPI.io keys</h3>
       <p style="font-family:var(--font-mono); font-size:0.78rem; color:var(--muted); margin:0 0 18px;">
         Powers the "Nationwide Search" marketplace page (Realtor.com, Redfin, Apartments.com).
-        Stored in Firestore, admin-only — never exposed to site visitors.
+        Add as many keys as you have — each free account caps out at 250 requests. When the active
+        one hits its limit, the site automatically switches to another key with room left, with no
+        interruption. Stored in Firestore, admin-only — never exposed to site visitors.
       </p>
-      <div id="current-key-display" style="font-family:var(--font-mono); font-size:0.85rem; margin-bottom:16px;">Loading…</div>
-      <div class="field"><label>New key</label><input id="realty-key-input" type="text" placeholder="rt_..."></div>
-      <div class="toolbar">
-        <button class="btn danger" id="clear-key" style="display:none;">Remove key</button>
-        <button class="btn" id="save-key">Save key</button>
+      <div id="realty-keys-list" style="margin-bottom:18px;">Loading…</div>
+      <div class="form-grid">
+        <div class="field"><label>Label (e.g. "Primary", "Backup 1")</label><input id="new-key-label" placeholder="Backup 1"></div>
+        <div class="field"><label>Key</label><input id="new-key-value" type="text" placeholder="rt_..."></div>
       </div>
+      <button class="btn" id="add-key-btn">Add key</button>
       <p id="key-status" style="font-family:var(--font-mono); font-size:0.78rem; margin-top:14px;"></p>
     </div>
 
@@ -682,41 +684,109 @@ async function renderSettings() {
     }
   });
 
-  // --- RealtyAPI key ---
-  const display = document.getElementById("current-key-display");
-  const clearBtn = document.getElementById("clear-key");
-  const statusEl = document.getElementById("key-status");
-  let existing = "";
+  // --- RealtyAPI keys (multi-key with auto-failover) ---
+  const keysListEl = document.getElementById("realty-keys-list");
+  const keyStatusEl = document.getElementById("key-status");
 
-  try {
-    const snap = await getDoc(doc(db, "settings", "integrations"));
-    existing = snap.exists() ? (snap.data().realtyApiKey || "") : "";
-    display.textContent = existing ? `Current key: ${maskKey(existing)}` : "No key saved yet.";
-    clearBtn.style.display = existing ? "inline-flex" : "none";
-  } catch (err) {
-    display.textContent = "Could not load current setting.";
-  }
-
-  document.getElementById("save-key").addEventListener("click", async () => {
-    const value = document.getElementById("realty-key-input").value.trim();
-    if (!value) { statusEl.textContent = "Enter a key before saving."; return; }
-    statusEl.textContent = "Saving…";
+  async function renderKeysList() {
+    let integrations;
     try {
-      await setDoc(doc(db, "settings", "integrations"), { realtyApiKey: value }, { merge: true });
-      statusEl.textContent = "Saved.";
-      renderSettings();
+      const snap = await getDoc(doc(db, "settings", "integrations"));
+      integrations = snap.exists() ? snap.data() : {};
     } catch (err) {
-      statusEl.textContent = "Could not save: " + err.message;
+      keysListEl.innerHTML = `<p style="font-family:var(--font-mono); font-size:0.8rem; color:var(--rust);">Could not load: ${err.message}</p>`;
+      return;
     }
-  });
+    const keys = integrations.realtyApiKeys || {};
+    const activeId = integrations.activeRealtyKeyId;
+    const ids = Object.keys(keys);
 
-  clearBtn.addEventListener("click", async () => {
-    if (!confirm("Remove the saved RealtyAPI key? The Nationwide Search page will stop returning results until a new one is saved.")) return;
+    keysListEl.innerHTML = ids.length ? ids.map(id => {
+      const k = keys[id];
+      const count = k.usageCount || 0;
+      const isActive = id === activeId;
+      const atLimit = count >= 250;
+      return `
+        <div style="border:1px solid var(--line); padding:12px 14px; margin-bottom:10px; display:flex; justify-content:space-between; align-items:center; gap:12px; flex-wrap:wrap;">
+          <div>
+            <strong style="font-size:0.9rem;">${k.label || "Untitled"}</strong>
+            ${isActive ? '<span class="badge paid" style="font-size:0.6rem; margin-left:8px;">ACTIVE</span>' : ""}
+            ${atLimit ? '<span class="badge pending" style="font-size:0.6rem; margin-left:6px;">AT LIMIT</span>' : ""}
+            <div style="font-family:var(--font-mono); font-size:0.76rem; color:var(--muted); margin-top:4px;">${maskKey(k.key)}</div>
+          </div>
+          <div style="display:flex; align-items:center; gap:8px;">
+            <label style="font-family:var(--font-mono); font-size:0.72rem; color:var(--muted);">Usage</label>
+            <input type="number" min="0" max="250" value="${count}" data-key-id="${id}" class="usage-input" style="width:70px; padding:6px 8px; background:var(--panel-2); border:1px solid var(--line); color:var(--parchment);">
+            <span style="font-family:var(--font-mono); font-size:0.76rem; color:var(--muted);">/ 250</span>
+            ${!isActive ? `<button class="btn small outline" data-use="${id}">Use this</button>` : ""}
+            <button class="btn small danger" data-remove="${id}">Remove</button>
+          </div>
+        </div>`;
+    }).join("") : `<p style="font-family:var(--font-mono); font-size:0.8rem; color:var(--muted);">No keys added yet.</p>`;
+
+    keysListEl.querySelectorAll(".usage-input").forEach(input => {
+      input.addEventListener("change", async () => {
+        const id = input.dataset.keyId;
+        const value = Math.max(0, Math.min(250, Number(input.value) || 0));
+        try {
+          await updateDoc(doc(db, "settings", "integrations"), { [`realtyApiKeys.${id}.usageCount`]: value });
+          keyStatusEl.textContent = `Updated usage for "${keys[id].label}" to ${value}/250.`;
+          renderKeysList();
+        } catch (err) {
+          keyStatusEl.textContent = "Could not update usage: " + err.message;
+        }
+      });
+    });
+
+    keysListEl.querySelectorAll("[data-use]").forEach(btn => {
+      btn.addEventListener("click", async () => {
+        try {
+          await setDoc(doc(db, "settings", "integrations"), { activeRealtyKeyId: btn.dataset.use }, { merge: true });
+          renderKeysList();
+        } catch (err) {
+          keyStatusEl.textContent = "Could not switch active key: " + err.message;
+        }
+      });
+    });
+
+    keysListEl.querySelectorAll("[data-remove]").forEach(btn => {
+      btn.addEventListener("click", async () => {
+        const id = btn.dataset.remove;
+        if (!confirm(`Remove the "${keys[id].label}" key? This can't be undone.`)) return;
+        try {
+          const updates = { [`realtyApiKeys.${id}`]: deleteField() };
+          await updateDoc(doc(db, "settings", "integrations"), updates);
+          if (id === activeId) {
+            // pick any remaining key as active, if there is one
+            const remaining = ids.filter(otherId => otherId !== id);
+            if (remaining.length) await setDoc(doc(db, "settings", "integrations"), { activeRealtyKeyId: remaining[0] }, { merge: true });
+          }
+          renderKeysList();
+        } catch (err) {
+          keyStatusEl.textContent = "Could not remove key: " + err.message;
+        }
+      });
+    });
+  }
+  renderKeysList();
+
+  document.getElementById("add-key-btn").addEventListener("click", async () => {
+    const label = document.getElementById("new-key-label").value.trim() || "Untitled";
+    const value = document.getElementById("new-key-value").value.trim();
+    if (!value) { keyStatusEl.textContent = "Enter a key before adding."; return; }
+    const id = "k_" + Math.random().toString(36).slice(2, 10);
     try {
-      await setDoc(doc(db, "settings", "integrations"), { realtyApiKey: "" }, { merge: true });
-      renderSettings();
+      const snap = await getDoc(doc(db, "settings", "integrations"));
+      const hasAnyKey = snap.exists() && Object.keys(snap.data().realtyApiKeys || {}).length > 0;
+      const updates = { [`realtyApiKeys.${id}`]: { label, key: value, usageCount: 0 } };
+      await setDoc(doc(db, "settings", "integrations"), updates, { merge: true });
+      if (!hasAnyKey) await setDoc(doc(db, "settings", "integrations"), { activeRealtyKeyId: id }, { merge: true });
+      document.getElementById("new-key-label").value = "";
+      document.getElementById("new-key-value").value = "";
+      keyStatusEl.textContent = `Added "${label}".`;
+      renderKeysList();
     } catch (err) {
-      statusEl.textContent = "Could not remove: " + err.message;
+      keyStatusEl.textContent = "Could not add key: " + err.message;
     }
   });
 
@@ -805,13 +875,17 @@ function threadMeta(threadId, msgs) {
     senderEmail: first?.senderEmail || msgs.find(m => m.senderEmail)?.senderEmail || null,
     lastText: last?.text || "",
     lastAt: last?.createdAt,
-    unread: msgs.some(m => m.senderType !== "admin" && !m.read)
+    unread: msgs.some(m => m.senderType !== "admin" && !m.read),
+    demo: msgs.some(m => m.demo)
   };
 }
 
 async function renderMessages() {
   main.innerHTML = `
     <h1>Messages</h1>
+    <div class="demo-banner" id="messages-demo-warning" style="display:none;">
+      <strong>Demo data present.</strong> Threads marked <span class="badge demo">DEMO</span> are simulated inquiries for customer-service training/testing — not real customers. Clear them using the separate training-tool app before real traffic uses this inbox.
+    </div>
     <div style="display:grid; grid-template-columns: 320px 1fr; gap:20px; align-items:start;">
       <div class="panel" style="padding:0; max-height:70vh; overflow-y:auto;">
         <div id="thread-list"><p style="padding:16px; font-family:var(--font-mono); font-size:0.8rem; color:var(--muted);">Loading…</p></div>
@@ -835,11 +909,16 @@ async function renderMessages() {
       .map(([id, msgs]) => threadMeta(id, msgs))
       .sort((a, b) => (b.lastAt?.toMillis?.() || 0) - (a.lastAt?.toMillis?.() || 0));
 
+    document.getElementById("messages-demo-warning").style.display = threads.some(t => t.demo) ? "block" : "none";
+
     threadListEl.innerHTML = threads.length ? threads.map(t => `
       <div class="thread-row ${t.threadId === activeThreadId ? "active" : ""}" data-thread="${t.threadId}" style="padding:14px 16px; border-bottom:1px solid var(--line); cursor:pointer; ${t.threadId === activeThreadId ? "background:var(--panel-2);" : ""}">
         <div style="display:flex; justify-content:space-between; align-items:center; gap:8px;">
           <strong style="font-size:0.9rem;">${t.senderName || "Visitor"}</strong>
-          <span class="badge ${t.senderType === "user" ? "paid" : ""}" style="font-size:0.62rem;">${t.senderType === "user" ? "Registered" : "Guest"}</span>
+          <span style="display:flex; gap:5px;">
+            ${t.demo ? '<span class="badge demo" style="font-size:0.6rem;">DEMO</span>' : ""}
+            <span class="badge ${t.senderType === "user" ? "paid" : ""}" style="font-size:0.62rem;">${t.senderType === "user" ? "Registered" : "Guest"}</span>
+          </span>
         </div>
         <div style="font-family:var(--font-mono); font-size:0.72rem; color:var(--muted); margin-top:3px;">${t.kind === "listing" ? `Re: ${t.listingLabel || "a listing"}` : "General"}</div>
         <div style="font-size:0.82rem; color:var(--muted); margin-top:4px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${t.lastText}${t.unread ? ' <span style="color:var(--rust);">●</span>' : ""}</div>
@@ -915,3 +994,4 @@ async function renderMessages() {
     });
   }
 }
+
