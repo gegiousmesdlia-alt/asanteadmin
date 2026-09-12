@@ -1,7 +1,7 @@
 import { auth, db, CLOUDINARY_CLOUD_NAME, CLOUDINARY_UPLOAD_PRESET, PUBLIC_SITE_BASE_URL } from "./firebase-config.js";
 import { signInWithEmailAndPassword, signOut, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
 import {
-  collection, addDoc, updateDoc, deleteDoc, doc, getDoc, getDocs, orderBy, query, where, serverTimestamp, setDoc, onSnapshot, deleteField
+  collection, addDoc, updateDoc, deleteDoc, doc, getDoc, getDocs, orderBy, query, where, serverTimestamp, setDoc, onSnapshot
 } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
 
 const loginScreen = document.getElementById("login-screen");
@@ -688,11 +688,30 @@ async function renderSettings() {
   const keysListEl = document.getElementById("realty-keys-list");
   const keyStatusEl = document.getElementById("key-status");
 
+  // Every write below reads the full current map, edits it in plain JS,
+  // then writes the WHOLE map back under the single top-level field
+  // "realtyApiKeys" — never a dotted string key like "realtyApiKeys.k_x".
+  // A dotted key passed to setDoc(...,{merge:true}) is NOT treated as a
+  // nested path — Firestore stores it as one literal field name containing
+  // a period, so the real nested map never receives the entry. That's
+  // exactly the bug that made added keys vanish. (updateDoc DOES support
+  // dotted paths correctly — this file used a mix, which is what made the
+  // bug so easy to miss; rewritten to one consistent, unambiguous pattern.)
+  async function loadIntegrations() {
+    const snap = await getDoc(doc(db, "settings", "integrations"));
+    return snap.exists() ? snap.data() : {};
+  }
+
+  async function saveKeysMap(keysMap, activeId) {
+    const payload = { realtyApiKeys: keysMap };
+    if (activeId !== undefined) payload.activeRealtyKeyId = activeId;
+    await setDoc(doc(db, "settings", "integrations"), payload, { merge: true });
+  }
+
   async function renderKeysList() {
     let integrations;
     try {
-      const snap = await getDoc(doc(db, "settings", "integrations"));
-      integrations = snap.exists() ? snap.data() : {};
+      integrations = await loadIntegrations();
     } catch (err) {
       keysListEl.innerHTML = `<p style="font-family:var(--font-mono); font-size:0.8rem; color:var(--rust);">Could not load: ${err.message}</p>`;
       return;
@@ -729,8 +748,12 @@ async function renderSettings() {
         const id = input.dataset.keyId;
         const value = Math.max(0, Math.min(250, Number(input.value) || 0));
         try {
-          await updateDoc(doc(db, "settings", "integrations"), { [`realtyApiKeys.${id}.usageCount`]: value });
-          keyStatusEl.textContent = `Updated usage for "${keys[id].label}" to ${value}/250.`;
+          const fresh = await loadIntegrations();
+          const freshKeys = fresh.realtyApiKeys || {};
+          if (!freshKeys[id]) { keyStatusEl.textContent = "That key no longer exists — refresh and try again."; return; }
+          freshKeys[id] = { ...freshKeys[id], usageCount: value };
+          await saveKeysMap(freshKeys);
+          keyStatusEl.textContent = `Updated usage for "${freshKeys[id].label}" to ${value}/250.`;
           renderKeysList();
         } catch (err) {
           keyStatusEl.textContent = "Could not update usage: " + err.message;
@@ -741,7 +764,8 @@ async function renderSettings() {
     keysListEl.querySelectorAll("[data-use]").forEach(btn => {
       btn.addEventListener("click", async () => {
         try {
-          await setDoc(doc(db, "settings", "integrations"), { activeRealtyKeyId: btn.dataset.use }, { merge: true });
+          const fresh = await loadIntegrations();
+          await saveKeysMap(fresh.realtyApiKeys || {}, btn.dataset.use);
           renderKeysList();
         } catch (err) {
           keyStatusEl.textContent = "Could not switch active key: " + err.message;
@@ -754,13 +778,14 @@ async function renderSettings() {
         const id = btn.dataset.remove;
         if (!confirm(`Remove the "${keys[id].label}" key? This can't be undone.`)) return;
         try {
-          const updates = { [`realtyApiKeys.${id}`]: deleteField() };
-          await updateDoc(doc(db, "settings", "integrations"), updates);
-          if (id === activeId) {
-            // pick any remaining key as active, if there is one
-            const remaining = ids.filter(otherId => otherId !== id);
-            if (remaining.length) await setDoc(doc(db, "settings", "integrations"), { activeRealtyKeyId: remaining[0] }, { merge: true });
-          }
+          const fresh = await loadIntegrations();
+          const freshKeys = { ...(fresh.realtyApiKeys || {}) };
+          delete freshKeys[id];
+          const remainingIds = Object.keys(freshKeys);
+          const newActiveId = fresh.activeRealtyKeyId === id
+            ? (remainingIds.length ? remainingIds[0] : null)
+            : fresh.activeRealtyKeyId;
+          await saveKeysMap(freshKeys, newActiveId);
           renderKeysList();
         } catch (err) {
           keyStatusEl.textContent = "Could not remove key: " + err.message;
@@ -776,11 +801,11 @@ async function renderSettings() {
     if (!value) { keyStatusEl.textContent = "Enter a key before adding."; return; }
     const id = "k_" + Math.random().toString(36).slice(2, 10);
     try {
-      const snap = await getDoc(doc(db, "settings", "integrations"));
-      const hasAnyKey = snap.exists() && Object.keys(snap.data().realtyApiKeys || {}).length > 0;
-      const updates = { [`realtyApiKeys.${id}`]: { label, key: value, usageCount: 0 } };
-      await setDoc(doc(db, "settings", "integrations"), updates, { merge: true });
-      if (!hasAnyKey) await setDoc(doc(db, "settings", "integrations"), { activeRealtyKeyId: id }, { merge: true });
+      const fresh = await loadIntegrations();
+      const freshKeys = { ...(fresh.realtyApiKeys || {}) };
+      const hasAnyKey = Object.keys(freshKeys).length > 0;
+      freshKeys[id] = { label, key: value, usageCount: 0 };
+      await saveKeysMap(freshKeys, hasAnyKey ? undefined : id);
       document.getElementById("new-key-label").value = "";
       document.getElementById("new-key-value").value = "";
       keyStatusEl.textContent = `Added "${label}".`;
