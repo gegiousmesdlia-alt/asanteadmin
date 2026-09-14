@@ -14,6 +14,13 @@ const firebaseConfig = {
   appId: "1:976239654869:web:92ed0bd406508120236f5c"
 };
 
+// Exported (not just used locally) so admin.js can spin up a SECOND,
+// separate Firebase app instance when creating a sub-admin's login.
+// Calling createUserWithEmailAndPassword on the normal `auth` above would
+// silently sign the browser in as that brand-new account, kicking the
+// owner out of their own session — a second app instance with its own
+// auth avoids that entirely.
+export { firebaseConfig };
 export const app = initializeApp(firebaseConfig);
 export const auth = getAuth(app);
 export const db = getFirestore(app);

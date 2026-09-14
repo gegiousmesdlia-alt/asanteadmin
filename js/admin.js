@@ -1,4 +1,4 @@
-import { auth, db, CLOUDINARY_CLOUD_NAME, CLOUDINARY_UPLOAD_PRESET, PUBLIC_SITE_BASE_URL } from "./firebase-config.js";
+import { auth, db, CLOUDINARY_CLOUD_NAME, CLOUDINARY_UPLOAD_PRESET, PUBLIC_SITE_BASE_URL, firebaseConfig } from "./firebase-config.js";
 import { signInWithEmailAndPassword, signOut, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
 import {
   collection, addDoc, updateDoc, deleteDoc, doc, getDoc, getDocs, orderBy, query, where, serverTimestamp, setDoc, onSnapshot
@@ -9,10 +9,26 @@ const dashboard = document.getElementById("dashboard");
 const main = document.getElementById("main");
 const loginError = document.getElementById("login-error");
 
+// Tabs a sub-admin can ever be assigned. "settings" and "staff" are
+// deliberately never offered here — see firestore.rules: those two are
+// locked to isOwner() at the database level too, not just hidden in the
+// UI, so this list isn't just a UI nicety being trusted to hold on its own.
+const ASSIGNABLE_TABS = ["listings", "agents", "enquiries", "bookings", "reviews", "messages"];
+const ALL_TABS = [...ASSIGNABLE_TABS, "settings", "staff"];
+
+let currentRole = null;        // "owner" | "sub-admin"
+let currentPermissions = null; // array of allowed tab names, only meaningful for sub-admins
+
+function visibleTabsForCurrentUser() {
+  if (currentRole === "owner") return ALL_TABS;
+  return (currentPermissions || []).filter(t => ASSIGNABLE_TABS.includes(t));
+}
+
 // ---------- auth gate ----------
 // Access is restricted to UIDs present in the "admins" collection.
 // Add a document at admins/{uid} (any fields) via the Firebase console
-// for each staff member allowed into this panel.
+// for the first ("owner") account — every account after that can be
+// created from the Staff tab instead. See README section 21.
 document.getElementById("login-form").addEventListener("submit", async (e) => {
   e.preventDefault();
   loginError.style.display = "none";
@@ -35,10 +51,31 @@ onAuthStateChanged(auth, async (user) => {
     await signOut(auth);
     return;
   }
+
+  const data = adminDoc.data();
+  // No "role" field at all = a legacy pre-sub-admin account = treat as
+  // owner, same backward-compatible default the Firestore rules use.
+  currentRole = (!("role" in data) || data.role === "owner") ? "owner" : "sub-admin";
+  currentPermissions = data.permissions || [];
+
   loginScreen.style.display = "none";
   dashboard.style.display = "block";
-  document.getElementById("signed-in-as").textContent = `Signed in as: ${user.email}`;
-  renderTab("listings");
+  document.getElementById("signed-in-as").textContent = `Signed in as: ${user.email}${currentRole === "sub-admin" ? " (sub-admin)" : ""}`;
+
+  const allowed = visibleTabsForCurrentUser();
+  document.querySelectorAll(".tab-btn").forEach(btn => {
+    btn.style.display = allowed.includes(btn.dataset.tab) ? "" : "none";
+  });
+  document.getElementById("staff-tab-btn").style.display = currentRole === "owner" ? "" : "none";
+
+  document.querySelectorAll(".tab-btn").forEach(b => b.classList.remove("active"));
+  const firstTab = allowed[0];
+  if (!firstTab) {
+    main.innerHTML = `<p style="font-family:var(--font-mono); font-size:0.85rem; color:var(--muted);">No tabs are assigned to this account yet — ask the owner to grant access from the Staff tab.</p>`;
+    return;
+  }
+  document.querySelector(`.tab-btn[data-tab="${firstTab}"]`)?.classList.add("active");
+  renderTab(firstTab);
 });
 
 // ---------- tabs ----------
@@ -51,6 +88,13 @@ document.querySelectorAll(".tab-btn").forEach(btn => {
 });
 
 function renderTab(tab) {
+  // Defensive check — the UI already hides tabs a sub-admin isn't
+  // assigned, but this guards against someone clicking a stray button
+  // reference or the tab list changing under them mid-session.
+  if (!visibleTabsForCurrentUser().includes(tab)) {
+    main.innerHTML = `<p style="font-family:var(--font-mono); font-size:0.85rem; color:var(--rust);">Not authorized for this tab.</p>`;
+    return;
+  }
   if (tab === "listings") return renderListings();
   if (tab === "agents") return renderAgents();
   if (tab === "enquiries") return renderEnquiries();
@@ -58,6 +102,7 @@ function renderTab(tab) {
   if (tab === "reviews") return renderReviews();
   if (tab === "messages") return renderMessages();
   if (tab === "settings") return renderSettings();
+  if (tab === "staff") return renderStaff();
 }
 
 // ---------- Cloudinary upload ----------
@@ -1020,3 +1065,162 @@ async function renderMessages() {
   }
 }
 
+
+// ---------- Staff (owner only — sub-admin accounts + per-tab permissions) ----------
+// Only reachable via the "staff" tab, which the UI only shows when
+// currentRole === "owner" — and firestore.rules independently locks
+// admins/{uid} writes to isOwner() too, so this isn't relying on the UI
+// hiding alone.
+const TAB_LABELS = {
+  listings: "Listings", agents: "Agents", enquiries: "Enquiries",
+  bookings: "Bookings & BTC", reviews: "Reviews", messages: "Messages"
+};
+
+async function renderStaff() {
+  main.innerHTML = `
+    <h1>Staff</h1>
+    <div class="panel" style="max-width:640px; margin-bottom:24px;">
+      <h3 style="margin:0 0 6px; font-family:var(--font-body); font-weight:600; text-transform:none; font-size:1.05rem;">Add a sub-admin</h3>
+      <p style="font-family:var(--font-mono); font-size:0.78rem; color:var(--muted); margin:0 0 16px;">
+        Creates a real login for them, limited to only the tabs you check below. Settings and Staff
+        management are never assignable — those stay owner-only, enforced by the database rules too,
+        not just this screen.
+      </p>
+      <div class="form-grid">
+        <div class="field"><label>Name</label><input id="staff-name" placeholder="e.g. Priya"></div>
+        <div class="field"><label>Email</label><input id="staff-email" type="email" placeholder="priya@example.com"></div>
+        <div class="field"><label>Temporary password</label><input id="staff-pass" type="text" placeholder="At least 6 characters"></div>
+      </div>
+      <div class="field">
+        <label>Tabs this person can access</label>
+        <div style="display:flex; flex-wrap:wrap; gap:14px; margin-top:6px;">
+          ${ASSIGNABLE_TABS.map(t => `
+            <label style="display:flex; align-items:center; gap:6px; font-family:var(--font-mono); font-size:0.82rem; font-weight:400; text-transform:none;">
+              <input type="checkbox" class="staff-perm-new" value="${t}"> ${TAB_LABELS[t]}
+            </label>`).join("")}
+        </div>
+      </div>
+      <button class="btn" id="add-staff-btn">Create sub-admin</button>
+      <p id="staff-status" style="font-family:var(--font-mono); font-size:0.78rem; margin-top:14px;"></p>
+    </div>
+
+    <div class="panel" style="max-width:640px;">
+      <h3 style="margin:0 0 12px; font-family:var(--font-body); font-weight:600; text-transform:none; font-size:1.05rem;">Everyone with access</h3>
+      <div id="staff-list">Loading…</div>
+    </div>`;
+
+  await renderStaffList();
+  document.getElementById("add-staff-btn").addEventListener("click", createSubAdmin);
+}
+
+async function renderStaffList() {
+  const listEl = document.getElementById("staff-list");
+  const snap = await getDocs(collection(db, "admins"));
+  const admins = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+
+  listEl.innerHTML = admins.map(a => {
+    const role = (!("role" in a) || a.role === "owner") ? "owner" : "sub-admin";
+    const isSelf = a.id === auth.currentUser.uid;
+    const perms = a.permissions || [];
+    return `
+      <div style="border:1px solid var(--line); padding:12px 14px; margin-bottom:10px;">
+        <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">
+          <div>
+            <strong style="font-size:0.9rem;">${a.name || a.email || a.id}</strong>
+            <span class="badge ${role === "owner" ? "paid" : ""}" style="font-size:0.6rem; margin-left:8px;">${role === "owner" ? "OWNER" : "SUB-ADMIN"}</span>
+            ${isSelf ? '<span class="badge" style="font-size:0.6rem; margin-left:6px;">YOU</span>' : ""}
+            <div style="font-family:var(--font-mono); font-size:0.76rem; color:var(--muted); margin-top:4px;">${a.email || ""}</div>
+          </div>
+          ${role !== "owner" && !isSelf ? `<button class="btn small danger" data-remove-staff="${a.id}">Remove access</button>` : ""}
+        </div>
+        ${role !== "owner" ? `
+          <div style="display:flex; flex-wrap:wrap; gap:12px; margin-top:10px; padding-top:10px; border-top:1px solid var(--line);">
+            ${ASSIGNABLE_TABS.map(t => `
+              <label style="display:flex; align-items:center; gap:6px; font-family:var(--font-mono); font-size:0.78rem;">
+                <input type="checkbox" class="staff-perm-edit" data-uid="${a.id}" value="${t}" ${perms.includes(t) ? "checked" : ""}> ${TAB_LABELS[t]}
+              </label>`).join("")}
+            <button class="btn small outline" data-save-perms="${a.id}">Save</button>
+          </div>` : ""}
+      </div>`;
+  }).join("");
+
+  listEl.querySelectorAll("[data-save-perms]").forEach(btn => {
+    btn.addEventListener("click", async () => {
+      const uid = btn.dataset.savePerms;
+      const checked = Array.from(listEl.querySelectorAll(`.staff-perm-edit[data-uid="${uid}"]:checked`)).map(c => c.value);
+      try {
+        await updateDoc(doc(db, "admins", uid), { permissions: checked });
+        document.getElementById("staff-status")?.remove(); // no-op if not present
+        await renderStaffList();
+      } catch (err) {
+        alert("Could not save permissions: " + err.message);
+      }
+    });
+  });
+
+  listEl.querySelectorAll("[data-remove-staff]").forEach(btn => {
+    btn.addEventListener("click", async () => {
+      const uid = btn.dataset.removeStaff;
+      if (!confirm("Remove this person's access to the admin panel? Their login will stop working immediately. (Note: this only revokes panel access — their Firebase Authentication account itself isn't deleted; do that from the Firebase console if you also want the login gone entirely.)")) return;
+      try {
+        await deleteDoc(doc(db, "admins", uid));
+        await renderStaffList();
+      } catch (err) {
+        alert("Could not remove access: " + err.message);
+      }
+    });
+  });
+}
+
+async function createSubAdmin() {
+  const name = document.getElementById("staff-name").value.trim();
+  const email = document.getElementById("staff-email").value.trim();
+  const password = document.getElementById("staff-pass").value;
+  const permissions = Array.from(document.querySelectorAll(".staff-perm-new:checked")).map(c => c.value);
+  const statusEl = document.getElementById("staff-status");
+
+  if (!email || !password || password.length < 6) {
+    statusEl.textContent = "Enter an email and a password of at least 6 characters.";
+    return;
+  }
+  if (!permissions.length) {
+    statusEl.textContent = "Check at least one tab for this person to access.";
+    return;
+  }
+
+  statusEl.textContent = "Creating…";
+  // A SEPARATE, temporary Firebase app instance — calling
+  // createUserWithEmailAndPassword on the panel's normal auth would
+  // silently sign this browser in as the brand-new account instead of the
+  // owner, since that's just how the Firebase client SDK works. Using a
+  // second app instance means the owner's own session is never touched.
+  let secondaryApp;
+  try {
+    const { initializeApp, deleteApp } = await import("https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js");
+    const { getAuth: getSecondaryAuth, createUserWithEmailAndPassword } = await import("https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js");
+
+    secondaryApp = initializeApp(firebaseConfig, "sub-admin-creator-" + Date.now());
+    const secondaryAuth = getSecondaryAuth(secondaryApp);
+    const cred = await createUserWithEmailAndPassword(secondaryAuth, email, password);
+
+    await setDoc(doc(db, "admins", cred.user.uid), {
+      role: "sub-admin",
+      name: name || email,
+      email,
+      permissions,
+      createdAt: serverTimestamp()
+    });
+
+    await deleteApp(secondaryApp);
+
+    document.getElementById("staff-name").value = "";
+    document.getElementById("staff-email").value = "";
+    document.getElementById("staff-pass").value = "";
+    document.querySelectorAll(".staff-perm-new").forEach(c => { c.checked = false; });
+    statusEl.textContent = `Created — share the email and password with ${name || email} directly (not over an insecure channel).`;
+    await renderStaffList();
+  } catch (err) {
+    if (secondaryApp) { try { const { deleteApp } = await import("https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js"); await deleteApp(secondaryApp); } catch {} }
+    statusEl.textContent = "Could not create sub-admin: " + err.message;
+  }
+}
