@@ -69,6 +69,78 @@ document.getElementById("login-form").addEventListener("submit", async (e) => {
 
 document.getElementById("logout-btn").addEventListener("click", () => signOut(auth));
 
+// ---------- Phone-screen side drawer ----------
+const sidebarEl = document.getElementById("sidebar");
+const sidebarOverlayEl = document.getElementById("sidebar-overlay");
+function closeDrawer() { sidebarEl.classList.remove("open"); sidebarOverlayEl.classList.remove("open"); }
+document.getElementById("menu-toggle").addEventListener("click", () => {
+  sidebarEl.classList.toggle("open");
+  sidebarOverlayEl.classList.toggle("open");
+});
+sidebarOverlayEl.addEventListener("click", closeDrawer);
+
+// ---------- Push notifications ----------
+// Converts the VAPID public key (base64url, from /api/vapid-public-key)
+// into the Uint8Array format the PushManager API expects.
+function urlBase64ToUint8Array(base64String) {
+  const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
+  const base64 = (base64String + padding).replace(/-/g, "+").replace(/_/g, "/");
+  const raw = atob(base64);
+  return Uint8Array.from([...raw].map(c => c.charCodeAt(0)));
+}
+
+document.getElementById("enable-push-btn").addEventListener("click", async () => {
+  const btn = document.getElementById("enable-push-btn");
+  if (!("serviceWorker" in navigator) || !("PushManager" in window)) {
+    alert("Push notifications aren't supported in this browser.");
+    return;
+  }
+  btn.disabled = true;
+  btn.textContent = "Enabling…";
+  try {
+    const permission = await Notification.requestPermission();
+    if (permission !== "granted") throw new Error("Notification permission was not granted.");
+
+    const keyRes = await fetch(`${PUBLIC_SITE_BASE_URL}/api/vapid-public-key`);
+    const keyData = await keyRes.json();
+    if (!keyRes.ok) throw new Error(keyData.error || "Could not fetch push key");
+
+    const reg = await navigator.serviceWorker.ready;
+    const subscription = await reg.pushManager.subscribe({
+      userVisibleOnly: true,
+      applicationServerKey: urlBase64ToUint8Array(keyData.publicKey)
+    });
+
+    const idToken = await auth.currentUser.getIdToken();
+    const saveRes = await fetch(`${PUBLIC_SITE_BASE_URL}/api/admin/save-push-subscription`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${idToken}` },
+      body: JSON.stringify({ app: "admin", subscription: subscription.toJSON() })
+    });
+    const saveData = await saveRes.json();
+    if (!saveRes.ok) throw new Error(saveData.error || "Could not save subscription");
+
+    btn.textContent = "Notifications on ✓";
+  } catch (err) {
+    btn.disabled = false;
+    btn.textContent = "Enable notifications";
+    alert("Could not enable notifications: " + err.message);
+  }
+});
+
+// Pings the training tool's subscribers — fire-and-forget, never blocks or
+// throws on the caller's side (a reply is already saved regardless).
+function notifyTrainingTool(text) {
+  auth.currentUser?.getIdToken().then(idToken => {
+    fetch(`${PUBLIC_SITE_BASE_URL}/api/admin/send-push`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${idToken}` },
+      body: JSON.stringify({ targetApp: "training", title: "New reply from Asante & Grove", body: text, url: "./" })
+    }).catch(() => {});
+  }).catch(() => {});
+}
+
+
 onAuthStateChanged(auth, async (user) => {
   if (!user) { loginScreen.style.display = "flex"; dashboard.style.display = "none"; return; }
   const adminDoc = await getDoc(doc(db, "admins", user.uid));
@@ -112,6 +184,7 @@ document.querySelectorAll(".tab-btn").forEach(btn => {
     document.querySelectorAll(".tab-btn").forEach(b => b.classList.remove("active"));
     btn.classList.add("active");
     renderTab(btn.dataset.tab);
+    closeDrawer();
   });
 });
 
@@ -806,6 +879,8 @@ async function renderSettings() {
 // guest or a registered user (see js/messaging.js: threadId is built from
 // either a persistent guest ID or the user's uid).
 let messagesUnsub = null;
+let typingUnsub = null;
+let typingListenerThreadId = null;
 
 function threadMeta(threadId, msgs) {
   const first = msgs[0];
@@ -831,7 +906,7 @@ async function renderMessages() {
     <div class="demo-banner" id="messages-demo-warning" style="display:none;">
       <strong>Demo data present.</strong> Threads marked <span class="badge demo">DEMO</span> are simulated inquiries for customer-service training/testing — not real customers. Clear them using the separate training-tool app before real traffic uses this inbox.
     </div>
-    <div style="display:grid; grid-template-columns: 320px 1fr; gap:20px; align-items:start;">
+    <div class="msg-layout">
       <div class="panel" style="padding:0; max-height:70vh; overflow-y:auto;">
         <div id="thread-list"><p style="padding:16px; font-family:var(--font-mono); font-size:0.8rem; color:var(--muted);">Loading…</p></div>
       </div>
@@ -852,7 +927,11 @@ async function renderMessages() {
 
     const threads = Object.entries(byThread)
       .map(([id, msgs]) => threadMeta(id, msgs))
-      .sort((a, b) => (b.lastAt?.toMillis?.() || 0) - (a.lastAt?.toMillis?.() || 0));
+      .sort((a, b) => {
+        const bUnread = b.unreadCount > 0 ? 1 : 0, aUnread = a.unreadCount > 0 ? 1 : 0;
+        if (bUnread !== aUnread) return bUnread - aUnread; // unread threads first
+        return (b.lastAt?.toMillis?.() || 0) - (a.lastAt?.toMillis?.() || 0); // then most-recent-first
+      });
 
     document.getElementById("messages-demo-warning").style.display = (isOwnerView() && threads.some(t => t.demo)) ? "block" : "none";
 
@@ -912,6 +991,7 @@ async function renderMessages() {
             ${m.text}
           </div>`).join("")}
       </div>
+      <p class="typing-indicator" id="typing-indicator"></p>
       <form id="reply-form" style="display:flex; gap:8px;">
         <input id="reply-input" type="text" placeholder="Reply…" style="flex:1; padding:10px 12px; background:var(--panel-2); border:1px solid var(--line); color:var(--parchment);">
         <button class="btn" type="submit">Send</button>
@@ -920,12 +1000,40 @@ async function renderMessages() {
     const transcriptEl = document.getElementById("thread-transcript");
     transcriptEl.scrollTop = transcriptEl.scrollHeight;
 
+    // Subscribe to this thread's typing status once per thread — the
+    // messages listener above re-runs renderThreadDetail on every new
+    // message too, and we don't want a fresh typing listener stacking up
+    // each time that happens.
+    if (typingListenerThreadId !== threadId) {
+      if (typingUnsub) typingUnsub();
+      typingListenerThreadId = threadId;
+      typingUnsub = onSnapshot(doc(db, "typingStatus", threadId), (snap) => {
+        const indicatorEl = document.getElementById("typing-indicator");
+        if (!indicatorEl) return; // thread panel has moved on
+        const t = snap.data();
+        const fresh = t?.guestTypingAt && (Date.now() - (t.guestTypingAt.toMillis?.() || 0) < 8000);
+        indicatorEl.textContent = (t?.guestTyping && fresh) ? `${meta.senderName || "Visitor"} is typing…` : "";
+      }, () => {});
+    }
+
+    let typingClearTimeout = null;
+    const replyInput = document.getElementById("reply-input");
+    replyInput.addEventListener("input", () => {
+      setDoc(doc(db, "typingStatus", threadId), { adminTyping: true, adminTypingAt: serverTimestamp() }, { merge: true }).catch(() => {});
+      clearTimeout(typingClearTimeout);
+      typingClearTimeout = setTimeout(() => {
+        setDoc(doc(db, "typingStatus", threadId), { adminTyping: false }, { merge: true }).catch(() => {});
+      }, 3000);
+    });
+
     document.getElementById("reply-form").addEventListener("submit", async (e) => {
       e.preventDefault();
       const input = document.getElementById("reply-input");
       const text = input.value.trim();
       if (!text) return;
       input.value = "";
+      clearTimeout(typingClearTimeout);
+      setDoc(doc(db, "typingStatus", threadId), { adminTyping: false }, { merge: true }).catch(() => {});
       await addDoc(collection(db, "messages"), {
         threadId,
         kind: meta.kind,
@@ -943,6 +1051,7 @@ async function renderMessages() {
         // reply yet? Powers that app's own unread badge — see its tool.js.
         readByGuest: false
       });
+      if (meta.demo) notifyTrainingTool(text);
     });
   }
 }
