@@ -78,3 +78,12 @@ a{ color:inherit; }
 .stars-admin{ color: var(--brass); letter-spacing: 1px; }
 .review-reply-box textarea{ min-height: 80px; }
 .thread-row:hover{ background: var(--panel-2); }
+
+/* Unread-count pills — shown capped at "9+", never a bare dot, so both the
+   sidebar tab and each thread row tell you exactly how many (or "a lot"). */
+.badge.count{
+  background: var(--rust); color:#fff; border-color: var(--rust);
+  border-radius: 10px; font-weight:600; min-width: 1.4em; text-align:center;
+}
+.tab-badge{ margin-left:8px; }
+.sidebar button{ display:flex; align-items:center; justify-content:space-between; }

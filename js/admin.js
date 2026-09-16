@@ -24,6 +24,33 @@ function visibleTabsForCurrentUser() {
   return (currentPermissions || []).filter(t => ASSIGNABLE_TABS.includes(t));
 }
 
+// The red DEMO badge/banners exist so the OWNER remembers to delete seed
+// data before launch — a sub-admin doing day-to-day replies doesn't need
+// (or need to know about) that distinction, so it's hidden for them.
+function isOwnerView() { return currentRole === "owner"; }
+
+// Unread pills always show an exact count (1-8) or "9+", never a bare dot.
+function formatCount(n) { return n >= 9 ? "9+" : String(n); }
+
+// Persistent "Messages" sidebar badge — kept alive regardless of which tab
+// is currently open, so unread count is visible at a glance from anywhere
+// in the panel, not just while the Messages tab itself is rendered.
+let messagesBadgeUnsub = null;
+function watchMessagesBadge() {
+  if (messagesBadgeUnsub) messagesBadgeUnsub();
+  const badgeEl = document.getElementById("messages-tab-badge");
+  if (!badgeEl || !visibleTabsForCurrentUser().includes("messages")) return;
+  messagesBadgeUnsub = onSnapshot(
+    query(collection(db, "messages"), where("senderType", "in", ["guest", "user"]), where("read", "==", false)),
+    (snap) => {
+      const n = snap.size;
+      badgeEl.style.display = n > 0 ? "" : "none";
+      badgeEl.textContent = formatCount(n);
+    },
+    () => { badgeEl.style.display = "none"; }
+  );
+}
+
 // ---------- auth gate ----------
 // Access is restricted to UIDs present in the "admins" collection.
 // Add a document at admins/{uid} (any fields) via the Firebase console
@@ -67,6 +94,7 @@ onAuthStateChanged(auth, async (user) => {
     btn.style.display = allowed.includes(btn.dataset.tab) ? "" : "none";
   });
   document.getElementById("staff-tab-btn").style.display = currentRole === "owner" ? "" : "none";
+  watchMessagesBadge();
 
   document.querySelectorAll(".tab-btn").forEach(b => b.classList.remove("active"));
   const firstTab = allowed[0];
@@ -340,29 +368,27 @@ async function renderReviews() {
   main.innerHTML = `
     <div class="toolbar"><h1>Reviews</h1>
       <div style="display:flex; gap:10px;">
-        <button class="btn outline" id="seed-demo">Seed 24 preview reviews (demo only)</button>
         <button class="btn" id="new-review">+ Add review manually</button>
       </div>
     </div>
     <div class="demo-banner" id="demo-warning" style="display:none;">
-      <strong>Demo data present.</strong> Rows marked <span class="badge demo">DEMO</span> are fabricated preview content for checking the layout — not real customers. Delete every demo row (button in each row) before this site goes live.
+      <strong>Demo data present.</strong> Rows marked <span class="badge demo">DEMO</span> are seeded preview content from the training tool — not real customers. Clear them from the training tool before this site goes live.
     </div>
     <div class="panel"><table class="tbl" id="reviews-table">
       <thead><tr><th>Buyer</th><th>Rating</th><th>Review</th><th>Published</th><th></th></tr></thead>
       <tbody><tr><td colspan="5">Loading…</td></tr></tbody>
     </table></div>`;
 
-  document.getElementById("seed-demo").addEventListener("click", seedDemoReviews);
   document.getElementById("new-review").addEventListener("click", () => openReviewModal(null));
 
   const snap = await getDocs(query(collection(db, "reviews"), orderBy("createdAt", "desc")));
   const rows = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-  document.getElementById("demo-warning").style.display = rows.some(r => r.demo) ? "block" : "none";
+  document.getElementById("demo-warning").style.display = (isOwnerView() && rows.some(r => r.demo)) ? "block" : "none";
 
   const tbody = document.querySelector("#reviews-table tbody");
   tbody.innerHTML = rows.length ? rows.map(r => `
     <tr>
-      <td>${r.displayName || ""} ${r.demo ? '<span class="badge demo">DEMO</span>' : ""}</td>
+      <td>${r.displayName || ""} ${(r.demo && isOwnerView()) ? '<span class="badge demo">DEMO</span>' : ""}</td>
       <td><span class="stars-admin">${"★".repeat(r.rating||0)}${"☆".repeat(5-(r.rating||0))}</span></td>
       <td style="max-width:340px;">${(r.text||"").slice(0,140)}${(r.text||"").length>140?"…":""}${r.adminReply ? `<br><em style="color:var(--muted); font-size:0.8rem;">Replied</em>` : ""}</td>
       <td><span class="badge ${r.approved ? "paid" : "pending"}">${r.approved ? "Published" : "Hidden"}</span></td>
@@ -444,157 +470,6 @@ function openReplyModal(review) {
     backdrop.remove();
     renderReviews();
   });
-}
-
-async function seedDemoReviews() {
-  if (!confirm("This adds 24 clearly-labeled DEMO reviews so you can preview how the site looks under real volume. They are NOT real customers — delete them from this tab before the site goes live. Continue?")) return;
-
-  const demoReviews = [
-    {
-      displayName: "Diane R.", rating: 5, propertyLabel: "2-bed apartment, Austin, TX",
-      text: "The apartment I bought is exactly the way it was described and the surroundings are peaceful — it matches the quiet I wanted for this stage of life. The only reason I'm not at five stars on speed is the paperwork took a little longer than I expected, but the team kept me updated the whole way.",
-      approved: true, verified: true, demo: true,
-      adminReply: "Thank you, Diane — glad the place has been everything you hoped for. We're working on tightening our paperwork turnaround."
-    },
-    {
-      displayName: "Marcus T.", rating: 4, propertyLabel: "1-bed unit, Denver, CO",
-      text: "Good experience overall. The agent was responsive and the viewing was easy to book. I did have a small mix-up with the initial booking fee receipt but it was sorted within a day once I raised it.",
-      approved: true, verified: true, demo: true, adminReply: ""
-    },
-    {
-      displayName: "Karen L.", rating: 5, propertyLabel: "3-bed townhome, Phoenix, AZ",
-      text: "This is my second purchase through this agency and both times the title verification gave me real peace of mind before I paid anything. The BTC payment option was a nice surprise too — settled the booking fee in about twenty minutes.",
-      approved: true, verified: true, demo: true, adminReply: ""
-    },
-    {
-      displayName: "Steven B.", rating: 3, propertyLabel: "Studio apartment, Tampa, FL",
-      text: "The unit itself is fine and matches the listing photos. What I'd flag for others is that the building's parking situation wasn't mentioned upfront and I had to ask directly. Would appreciate more detail on amenities in future listings.",
-      approved: true, verified: true, demo: true, adminReply: "Fair point, Steven — we're updating our listing template to include parking and amenities as standard fields."
-    },
-    {
-      displayName: "Patricia N.", rating: 4, propertyLabel: "2-bed condo, Charlotte, NC",
-      text: "I have a few names I'd like to correct on my documentation — do I still need your office for that, or should I go through a separate legal service to get it amended?",
-      approved: true, verified: true, demo: true,
-      adminReply: "You can start with us, Patricia — send the correction request to hello@asanteandgrove.example and we'll tell you whether it's something our office handles directly or where to go if it needs outside legal input."
-    },
-    {
-      displayName: "Gerald M.", rating: 5, propertyLabel: "1-bed apartment for rent, Raleigh, NC",
-      text: "Renting through here was much smoother than I expected. Clear lease terms, no hidden charges, and the agent actually showed up on time for the viewing — which apparently is rare.",
-      approved: true, verified: true, demo: true, adminReply: ""
-    },
-    {
-      displayName: "Linda H.", rating: 5, propertyLabel: "3-bed single-family home, Nashville, TN",
-      text: "Closing took under three weeks from offer to keys, which I wasn't expecting for a first-time buyer. The agent walked me through every document before I signed anything, which made the whole process much less intimidating.",
-      approved: true, verified: true, demo: true, adminReply: ""
-    },
-    {
-      displayName: "Robert W.", rating: 4, propertyLabel: "2-bed apartment, Portland, OR",
-      text: "Location is unbeatable and the unit is well kept. Only knock is it can get noisy on weekends since it's right above the ground-floor retail space — worth mentioning to anyone who works early mornings.",
-      approved: true, verified: true, demo: true, adminReply: ""
-    },
-    {
-      displayName: "Susan D.", rating: 5, propertyLabel: "4-bed single-family home, San Antonio, TX",
-      text: "We specifically needed to be in a certain school district and the agent found us three options within a week that fit both that and our budget. Genuinely felt like someone was listening instead of just sending listings.",
-      approved: true, verified: true, demo: true, adminReply: "That means a lot, Susan — glad the school district search worked out for your family."
-    },
-    {
-      displayName: "James F.", rating: 3, propertyLabel: "Studio apartment, Indianapolis, IN",
-      text: "The apartment is as advertised, but the building's elevator has been out of service twice since I moved in three months ago, and I'm on the 6th floor. Management in the building itself has been slow to respond, separate from the agency.",
-      approved: true, verified: true, demo: true,
-      adminReply: "Sorry to hear this, James — we've flagged the elevator issue with the building manager on your behalf and will follow up until it's resolved."
-    },
-    {
-      displayName: "Barbara G.", rating: 5, propertyLabel: "2-bed duplex, Sacramento, CA",
-      text: "Every email I sent got a same-day reply, which after renting through two other agencies previously, was honestly the biggest selling point for me. The unit itself is clean and exactly matched the listing.",
-      approved: true, verified: true, demo: true, adminReply: ""
-    },
-    {
-      displayName: "William J.", rating: 2, propertyLabel: "1-bed apartment for rent, Kansas City, MO",
-      text: "The AC unit stopped working within the first week of my lease and it took almost ten days to get someone out to fix it during a very hot stretch. The apartment itself is nice but that response time was a real problem.",
-      approved: true, verified: true, demo: true,
-      adminReply: "This isn't the experience we want for new tenants, William — we're following up with the maintenance contractor directly and reviewing our response-time policy for AC and heating issues specifically."
-    },
-    {
-      displayName: "Nancy C.", rating: 5, propertyLabel: "3-bed townhome, Orlando, FL",
-      text: "Paid the booking fee in BTC out of curiosity more than necessity and it went through faster than a bank transfer would have. Everything after that — inspection, closing — was straightforward with no last-minute fees added on.",
-      approved: true, verified: true, demo: true, adminReply: ""
-    },
-    {
-      displayName: "Richard P.", rating: 4, propertyLabel: "2-bed condo, Pittsburgh, PA",
-      text: "The agent helped us negotiate the price down a bit after the inspection turned up a few minor items, which we appreciated. Communication was solid throughout, just occasionally slow on weekends.",
-      approved: true, verified: true, demo: true, adminReply: ""
-    },
-    {
-      displayName: "Betty E.", rating: 5, propertyLabel: "1-bed condo, Cincinnati, OH",
-      text: "My husband and I are retired and wanted somewhere quiet with minimal upkeep. This building has been exactly that — friendly neighbors, well maintained, and the agent never once made us feel rushed during viewings, which we appreciated at our pace.",
-      approved: true, verified: true, demo: true,
-      adminReply: "Thank you, Betty — really glad it's been a comfortable fit for you both."
-    },
-    {
-      displayName: "Charles O.", rating: 3, propertyLabel: "2-bed apartment, Salt Lake City, UT",
-      text: "Had an issue where my assigned parking spot was already occupied by another resident's car when I moved in, and it took the leasing office a few days to sort out. The unit itself has been fine since then.",
-      approved: true, verified: true, demo: true,
-      adminReply: "Apologies for that mix-up at move-in, Charles — glad it got sorted, and we've asked the leasing office to double-check spot assignments before handover going forward."
-    },
-    {
-      displayName: "Sandra Y.", rating: 5, propertyLabel: "3-bed single-family home, Albuquerque, NM",
-      text: "I asked a lot of questions as a first-time buyer, probably more than most clients, and never once felt like I was being rushed through anything. The agent explained every line of the closing costs before I signed.",
-      approved: true, verified: true, demo: true, adminReply: ""
-    },
-    {
-      displayName: "Thomas V.", rating: 4, propertyLabel: "Studio apartment for rent, Richmond, VA",
-      text: "Good value for the area and move-in was easy. Walls are a bit thin so I can hear the neighbor's TV some evenings, but for the price and location I'm not complaining much.",
-      approved: true, verified: true, demo: true, adminReply: ""
-    },
-    {
-      displayName: "Donna M.", rating: 5, propertyLabel: "2-bed townhome, Boise, ID",
-      text: "Move-in ready exactly as promised — no last-minute repairs I had to chase down, no surprise charges on the final invoice. After a rough experience with a different agency last year, this was a relief.",
-      approved: true, verified: true, demo: true, adminReply: ""
-    },
-    {
-      displayName: "Joseph K.", rating: 1, propertyLabel: "1-bed apartment, Columbus, OH",
-      text: "I paid a booking fee to secure a viewing and then the listing was marked unavailable two days later with no explanation and no refund processed for almost three weeks. Had to follow up multiple times to get it resolved.",
-      approved: true, verified: true, demo: true,
-      adminReply: "Joseph, this fell well short of what we expect from ourselves — a delayed refund on a cancelled booking is on us. We've since changed our process so refunds trigger automatically the same day a listing is pulled, and we've reached out to make sure yours was fully resolved."
-    },
-    {
-      displayName: "Carol H.", rating: 4, propertyLabel: "3-bed single-family home, Denver, CO",
-      text: "The title verification step gave me real confidence before committing to an offer — my brother had issues with a title dispute on his own home purchase elsewhere, so I was glad this was checked upfront.",
-      approved: true, verified: true, demo: true, adminReply: ""
-    },
-    {
-      displayName: "Daniel S.", rating: 5, propertyLabel: "2-bed apartment, Tampa, FL",
-      text: "Booked a viewing on a Tuesday and was signing paperwork by Friday. I've rented through slower agencies before and the turnaround here was genuinely refreshing.",
-      approved: true, verified: true, demo: true, adminReply: ""
-    },
-    {
-      displayName: "Ruth W.", rating: 3, propertyLabel: "1-bed condo, Austin, TX",
-      text: "The unit is nice but the listed square footage was noticeably off from what an independent appraiser measured later — not a dealbreaker for me, but worth double-checking listing measurements before finalizing anything.",
-      approved: true, verified: true, demo: true,
-      adminReply: "Thanks for flagging this, Ruth — we're re-verifying square footage on our active listings against appraisal data to catch discrepancies like this going forward."
-    },
-    {
-      displayName: "Kenneth B.", rating: 5, propertyLabel: "2-bed duplex, Phoenix, AZ",
-      text: "What stood out most was the agent checking in about two weeks after move-in just to see how things were going, with no sales pitch attached. Small thing, but it made the whole experience feel less transactional.",
-      approved: true, verified: true, demo: true, adminReply: ""
-    }
-  ];
-
-  let succeeded = 0;
-  let firstError = null;
-  for (const r of demoReviews) {
-    try {
-      await addDoc(collection(db, "reviews"), { ...r, createdAt: serverTimestamp() });
-      succeeded++;
-    } catch (err) {
-      firstError = err;
-      break; // stop on first failure — almost always means every remaining write will fail the same way (e.g. rules)
-    }
-  }
-  if (firstError) {
-    alert(`Only ${succeeded} of ${demoReviews.length} demo reviews were saved before this error:\n\n${firstError.message}\n\nThis usually means firestore.rules hasn't been published with the current "reviews" match block, or you're not signed in as an admin.`);
-  }
-  renderReviews();
 }
 
 // ---------- Settings (admin-managed third-party API keys) ----------
@@ -945,7 +820,7 @@ function threadMeta(threadId, msgs) {
     senderEmail: first?.senderEmail || msgs.find(m => m.senderEmail)?.senderEmail || null,
     lastText: last?.text || "",
     lastAt: last?.createdAt,
-    unread: msgs.some(m => m.senderType !== "admin" && !m.read),
+    unreadCount: msgs.filter(m => m.senderType !== "admin" && !m.read).length,
     demo: msgs.some(m => m.demo)
   };
 }
@@ -979,19 +854,22 @@ async function renderMessages() {
       .map(([id, msgs]) => threadMeta(id, msgs))
       .sort((a, b) => (b.lastAt?.toMillis?.() || 0) - (a.lastAt?.toMillis?.() || 0));
 
-    document.getElementById("messages-demo-warning").style.display = threads.some(t => t.demo) ? "block" : "none";
+    document.getElementById("messages-demo-warning").style.display = (isOwnerView() && threads.some(t => t.demo)) ? "block" : "none";
 
     threadListEl.innerHTML = threads.length ? threads.map(t => `
       <div class="thread-row ${t.threadId === activeThreadId ? "active" : ""}" data-thread="${t.threadId}" style="padding:14px 16px; border-bottom:1px solid var(--line); cursor:pointer; ${t.threadId === activeThreadId ? "background:var(--panel-2);" : ""}">
         <div style="display:flex; justify-content:space-between; align-items:center; gap:8px;">
           <strong style="font-size:0.9rem;">${t.senderName || "Visitor"}</strong>
-          <span style="display:flex; gap:5px;">
-            ${t.demo ? '<span class="badge demo" style="font-size:0.6rem;">DEMO</span>' : ""}
+          <span style="display:flex; gap:5px; align-items:center;">
+            ${(t.demo && isOwnerView()) ? '<span class="badge demo" style="font-size:0.6rem;">DEMO</span>' : ""}
             <span class="badge ${t.senderType === "user" ? "paid" : ""}" style="font-size:0.62rem;">${t.senderType === "user" ? "Registered" : "Guest"}</span>
           </span>
         </div>
         <div style="font-family:var(--font-mono); font-size:0.72rem; color:var(--muted); margin-top:3px;">${t.kind === "listing" ? `Re: ${t.listingLabel || "a listing"}` : "General"}</div>
-        <div style="font-size:0.82rem; color:var(--muted); margin-top:4px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${t.lastText}${t.unread ? ' <span style="color:var(--rust);">●</span>' : ""}</div>
+        <div style="font-size:0.82rem; color:var(--muted); margin-top:4px; display:flex; justify-content:space-between; align-items:center; gap:8px;">
+          <span style="white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${t.lastText}</span>
+          ${t.unreadCount ? `<span class="badge count" style="flex-shrink:0;">${formatCount(t.unreadCount)}</span>` : ""}
+        </div>
       </div>
     `).join("") : `<p style="padding:16px; font-family:var(--font-mono); font-size:0.8rem; color:var(--muted);">No messages yet.</p>`;
 
@@ -1059,7 +937,11 @@ async function renderMessages() {
         senderEmail: null,
         text,
         createdAt: serverTimestamp(),
-        read: true
+        read: true,
+        // Mirrors "read" above but from the other side: has the guest (or,
+        // for demo threads, whoever's using the training tool) seen this
+        // reply yet? Powers that app's own unread badge — see its tool.js.
+        readByGuest: false
       });
     });
   }
