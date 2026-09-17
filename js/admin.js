@@ -95,6 +95,10 @@ document.getElementById("enable-push-btn").addEventListener("click", async () =>
     alert("Push notifications aren't supported in this browser.");
     return;
   }
+  if (Notification.permission === "denied") {
+    alert("Notifications were previously blocked for this app. Browsers won't re-prompt once blocked — re-enable them from your browser/OS notification settings for this app, then try again.");
+    return;
+  }
   btn.disabled = true;
   btn.textContent = "Enabling…";
   try {
@@ -122,6 +126,7 @@ document.getElementById("enable-push-btn").addEventListener("click", async () =>
 
     btn.textContent = "Notifications on ✓";
   } catch (err) {
+    console.error("Enable notifications failed:", err);
     btn.disabled = false;
     btn.textContent = "Enable notifications";
     alert("Could not enable notifications: " + err.message);
@@ -130,14 +135,19 @@ document.getElementById("enable-push-btn").addEventListener("click", async () =>
 
 // Pings the training tool's subscribers — fire-and-forget, never blocks or
 // throws on the caller's side (a reply is already saved regardless).
-function notifyTrainingTool(text) {
+function notifyTrainingTool(text, threadId) {
   auth.currentUser?.getIdToken().then(idToken => {
     fetch(`${PUBLIC_SITE_BASE_URL}/api/admin/send-push`, {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${idToken}` },
-      body: JSON.stringify({ targetApp: "training", title: "New reply from Asante & Grove", body: text, url: "./" })
-    }).catch(() => {});
-  }).catch(() => {});
+      body: JSON.stringify({
+        targetApp: "training",
+        title: "New reply from Asante & Grove",
+        body: text,
+        url: `./?tab=inbox&thread=${encodeURIComponent(threadId)}`
+      })
+    }).catch(err => console.error("notifyTrainingTool failed:", err));
+  }).catch(err => console.error("notifyTrainingTool failed:", err));
 }
 
 
@@ -169,13 +179,24 @@ onAuthStateChanged(auth, async (user) => {
   watchMessagesBadge();
 
   document.querySelectorAll(".tab-btn").forEach(b => b.classList.remove("active"));
-  const firstTab = allowed[0];
-  if (!firstTab) {
+
+  // A push notification opened this page with ?tab=...&thread=... (see
+  // notificationclick in sw.js) — jump straight there instead of the
+  // normal first-tab default, as long as this account is actually allowed
+  // to see that tab.
+  const deepLinkParams = new URLSearchParams(location.search);
+  const deepLinkTab = deepLinkParams.get("tab");
+  const deepLinkThread = deepLinkParams.get("thread");
+  history.replaceState({}, "", location.pathname); // don't re-trigger this on a plain refresh
+
+  const startTab = (deepLinkTab && allowed.includes(deepLinkTab)) ? deepLinkTab : allowed[0];
+  if (!startTab) {
     main.innerHTML = `<p style="font-family:var(--font-mono); font-size:0.85rem; color:var(--muted);">No tabs are assigned to this account yet — ask the owner to grant access from the Staff tab.</p>`;
     return;
   }
-  document.querySelector(`.tab-btn[data-tab="${firstTab}"]`)?.classList.add("active");
-  renderTab(firstTab);
+  if (deepLinkTab === startTab && deepLinkThread) pendingDeepLinkThreadId = deepLinkThread;
+  document.querySelector(`.tab-btn[data-tab="${startTab}"]`)?.classList.add("active");
+  renderTab(startTab);
 });
 
 // ---------- tabs ----------
@@ -881,6 +902,7 @@ async function renderSettings() {
 let messagesUnsub = null;
 let typingUnsub = null;
 let typingListenerThreadId = null;
+let pendingDeepLinkThreadId = null; // set from a push notification's ?thread= param
 
 function threadMeta(threadId, msgs) {
   const first = msgs[0];
@@ -959,6 +981,13 @@ async function renderMessages() {
     // Keep the open thread's transcript live-updated too.
     if (activeThreadId && byThread[activeThreadId]) {
       renderThreadDetail(activeThreadId, byThread[activeThreadId]);
+    } else if (pendingDeepLinkThreadId && byThread[pendingDeepLinkThreadId]) {
+      // A push notification's ?thread= param pointed here — open it now
+      // that the thread data has actually loaded, then clear the flag so
+      // it doesn't re-trigger on the next live update.
+      const target = pendingDeepLinkThreadId;
+      pendingDeepLinkThreadId = null;
+      openThread(target, byThread[target]);
     }
   });
 
@@ -1044,6 +1073,12 @@ async function renderMessages() {
         senderName: "Asante & Grove",
         senderEmail: null,
         text,
+        // Without this, a reply to a demo thread silently vanishes from
+        // the training tool's Inbox — its query filters on demo==true per
+        // MESSAGE, not per thread, so a reply missing this field is
+        // invisible there even though the thread itself is a demo thread
+        // and the push notification about it still fires normally.
+        demo: !!meta.demo,
         createdAt: serverTimestamp(),
         read: true,
         // Mirrors "read" above but from the other side: has the guest (or,
@@ -1051,7 +1086,7 @@ async function renderMessages() {
         // reply yet? Powers that app's own unread badge — see its tool.js.
         readByGuest: false
       });
-      if (meta.demo) notifyTrainingTool(text);
+      if (meta.demo) notifyTrainingTool(text, threadId);
     });
   }
 }
