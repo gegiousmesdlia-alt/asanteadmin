@@ -3,11 +3,27 @@ import { signInWithEmailAndPassword, signOut, onAuthStateChanged } from "https:/
 import {
   collection, addDoc, updateDoc, deleteDoc, doc, getDoc, getDocs, orderBy, query, where, serverTimestamp, setDoc, onSnapshot
 } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+import { t, getLang, setLang, detectAndApplyLanguage } from "./i18n.js";
 
 const loginScreen = document.getElementById("login-screen");
 const dashboard = document.getElementById("dashboard");
 const main = document.getElementById("main");
 const loginError = document.getElementById("login-error");
+
+// ---------- Language: auto-detect once, manual switch always available ----------
+detectAndApplyLanguage();
+document.querySelectorAll(".lang-switch-select").forEach(sel => {
+  sel.value = getLang();
+  sel.addEventListener("change", () => setLang(sel.value));
+});
+window.addEventListener("adminlangchange", (e) => {
+  document.querySelectorAll(".lang-switch-select").forEach(sel => { sel.value = e.detail.lang; });
+  // Re-render whatever dynamic tab is currently open so its inline
+  // t()-driven strings (Reviews/Messages content, etc.) pick up the change
+  // immediately too, not just the static chrome.
+  const activeBtn = document.querySelector(".tab-btn.active");
+  if (activeBtn && dashboard.style.display !== "none") renderTab(activeBtn.dataset.tab);
+});
 
 // Tabs a sub-admin can ever be assigned. "settings" and "staff" are
 // deliberately never offered here — see firestore.rules: those two are
@@ -89,21 +105,37 @@ function urlBase64ToUint8Array(base64String) {
   return Uint8Array.from([...raw].map(c => c.charCodeAt(0)));
 }
 
-document.getElementById("enable-push-btn").addEventListener("click", async () => {
-  const btn = document.getElementById("enable-push-btn");
+const pushBtn = document.getElementById("enable-push-btn");
+
+// `auto: true` is used for the silent on-open attempt (see
+// maybeAutoRequestPush below) — it skips the browser's own permission
+// prompt when permission is already anything other than "default" (so it
+// never nags someone who's already said no), and stays quiet on failure
+// instead of alert()-ing at someone who didn't ask for anything just by
+// opening the app.
+async function enablePush({ auto = false } = {}) {
   if (!("serviceWorker" in navigator) || !("PushManager" in window)) {
-    alert("Push notifications aren't supported in this browser.");
+    if (!auto) alert(t("push.unsupported"));
     return;
   }
   if (Notification.permission === "denied") {
-    alert("Notifications were previously blocked for this app. Browsers won't re-prompt once blocked — re-enable them from your browser/OS notification settings for this app, then try again.");
+    if (!auto) alert(t("push.denied_prev"));
     return;
   }
-  btn.disabled = true;
-  btn.textContent = "Enabling…";
+  if (!auto) {
+    pushBtn.disabled = true;
+    pushBtn.textContent = t("header.enabling_push");
+  }
   try {
+    // This is the actual OS/browser permission prompt. On a fresh
+    // ("default") permission state it shows the Allow/Block dialog; if
+    // permission was already decided (granted or denied) this resolves
+    // immediately with that same value and shows nothing new.
     const permission = await Notification.requestPermission();
-    if (permission !== "granted") throw new Error("Notification permission was not granted.");
+    if (permission !== "granted") {
+      if (!auto) { pushBtn.disabled = false; pushBtn.textContent = t("header.enable_push"); }
+      return; // user tapped "Block" (or dismissed) — leave the button as-is, never hide it on anything but success
+    }
 
     const keyRes = await fetch(`${PUBLIC_SITE_BASE_URL}/api/vapid-public-key`);
     const keyData = await keyRes.json();
@@ -124,16 +156,46 @@ document.getElementById("enable-push-btn").addEventListener("click", async () =>
     const saveData = await saveRes.json();
     if (!saveRes.ok) throw new Error(saveData.error || "Could not save subscription");
 
-    btn.textContent = "Notifications on ✓";
+    // Success — hide the button entirely rather than just relabeling it.
+    // There's deliberately no way to tap this back "off": that would look
+    // like a toggle and someone could tap it by accident, silently
+    // disabling notifications. Turning them off again is a
+    // browser/OS-notification-settings action, not a button in this app.
+    pushBtn.style.display = "none";
   } catch (err) {
     console.error("Enable notifications failed:", err);
-    btn.disabled = false;
-    btn.textContent = "Enable notifications";
-    alert("Could not enable notifications: " + err.message);
+    if (!auto) {
+      pushBtn.disabled = false;
+      pushBtn.textContent = t("header.enable_push");
+      alert(t("push.could_not_enable") + err.message);
+    }
   }
-});
+}
 
-// Pings the training tool's subscribers — fire-and-forget, never blocks or
+pushBtn.addEventListener("click", () => enablePush({ auto: false }));
+
+// Auto-request once per app open, but only for the installed home-screen
+// app (not a plain browser tab someone happens to be visiting), and only
+// when permission is still "default" — i.e. never yet explicitly decided.
+// A "default" state also covers someone who dismissed the OS prompt
+// without tapping Allow or Block, so this naturally re-asks next time they
+// open the app in that case. Once they've explicitly tapped "Block," the
+// browser itself refuses to show that prompt again until they change it
+// in their browser/OS settings — no code here can override that.
+function isStandalone() {
+  return window.matchMedia?.("(display-mode: standalone)").matches || navigator.standalone === true;
+}
+function maybeAutoRequestPush() {
+  if (isStandalone() && "Notification" in window && Notification.permission === "default") {
+    enablePush({ auto: true });
+  } else if (Notification.permission === "granted") {
+    // Already decided in an earlier session — no prompt needed, just make
+    // sure the button isn't sitting there implying otherwise.
+    pushBtn.style.display = "none";
+  }
+}
+
+
 // throws on the caller's side (a reply is already saved regardless).
 function notifyTrainingTool(text, threadId) {
   auth.currentUser?.getIdToken().then(idToken => {
@@ -177,6 +239,7 @@ onAuthStateChanged(auth, async (user) => {
   });
   document.getElementById("staff-tab-btn").style.display = currentRole === "owner" ? "" : "none";
   watchMessagesBadge();
+  maybeAutoRequestPush();
 
   document.querySelectorAll(".tab-btn").forEach(b => b.classList.remove("active"));
 
@@ -460,17 +523,17 @@ async function renderBookings() {
 // reviews as if from real customers is not something to ship.
 async function renderReviews() {
   main.innerHTML = `
-    <div class="toolbar"><h1>Reviews</h1>
+    <div class="toolbar"><h1>${t("reviews.title")}</h1>
       <div style="display:flex; gap:10px;">
-        <button class="btn" id="new-review">+ Add review manually</button>
+        <button class="btn" id="new-review">${t("reviews.add_manual")}</button>
       </div>
     </div>
     <div class="demo-banner" id="demo-warning" style="display:none;">
-      <strong>Demo data present.</strong> Rows marked <span class="badge demo">DEMO</span> are seeded preview content from the training tool — not real customers. Clear them from the training tool before this site goes live.
+      <strong>${t("reviews.demo_warning")}</strong>
     </div>
     <div class="panel"><table class="tbl" id="reviews-table">
       <thead><tr><th>Buyer</th><th>Rating</th><th>Review</th><th>Published</th><th></th></tr></thead>
-      <tbody><tr><td colspan="5">Loading…</td></tr></tbody>
+      <tbody><tr><td colspan="5">${t("common.loading")}</td></tr></tbody>
     </table></div>`;
 
   document.getElementById("new-review").addEventListener("click", () => openReviewModal(null));
@@ -924,15 +987,15 @@ function threadMeta(threadId, msgs) {
 
 async function renderMessages() {
   main.innerHTML = `
-    <h1>Messages</h1>
+    <h1>${t("messages.title")}</h1>
     <div class="demo-banner" id="messages-demo-warning" style="display:none;">
-      <strong>Demo data present.</strong> Threads marked <span class="badge demo">DEMO</span> are simulated inquiries for customer-service training/testing — not real customers. Clear them using the separate training-tool app before real traffic uses this inbox.
+      <strong>${t("messages.demo_warning")}</strong>
     </div>
-    <div class="msg-layout">
-      <div class="panel" style="padding:0; max-height:70vh; overflow-y:auto;">
-        <div id="thread-list"><p style="padding:16px; font-family:var(--font-mono); font-size:0.8rem; color:var(--muted);">Loading…</p></div>
+    <div class="msg-layout" id="msg-layout">
+      <div class="panel thread-list-panel" style="padding:0; max-height:70vh; overflow-y:auto;">
+        <div id="thread-list"><p style="padding:16px; font-family:var(--font-mono); font-size:0.8rem; color:var(--muted);">${t("common.loading")}</p></div>
       </div>
-      <div class="panel" id="thread-detail" style="min-height:300px;">
+      <div class="panel thread-detail-panel" id="thread-detail" style="min-height:300px;">
         <p style="font-family:var(--font-mono); font-size:0.85rem; color:var(--muted);">Select a conversation to view it.</p>
       </div>
     </div>`;
@@ -955,24 +1018,24 @@ async function renderMessages() {
         return (b.lastAt?.toMillis?.() || 0) - (a.lastAt?.toMillis?.() || 0); // then most-recent-first
       });
 
-    document.getElementById("messages-demo-warning").style.display = (isOwnerView() && threads.some(t => t.demo)) ? "block" : "none";
+    document.getElementById("messages-demo-warning").style.display = (isOwnerView() && threads.some(th => th.demo)) ? "block" : "none";
 
-    threadListEl.innerHTML = threads.length ? threads.map(t => `
-      <div class="thread-row ${t.threadId === activeThreadId ? "active" : ""}" data-thread="${t.threadId}" style="padding:14px 16px; border-bottom:1px solid var(--line); cursor:pointer; ${t.threadId === activeThreadId ? "background:var(--panel-2);" : ""}">
+    threadListEl.innerHTML = threads.length ? threads.map(th => `
+      <div class="thread-row ${th.threadId === activeThreadId ? "active" : ""}" data-thread="${th.threadId}" style="padding:14px 16px; border-bottom:1px solid var(--line); cursor:pointer; ${th.threadId === activeThreadId ? "background:var(--panel-2);" : ""}">
         <div style="display:flex; justify-content:space-between; align-items:center; gap:8px;">
-          <strong style="font-size:0.9rem;">${t.senderName || "Visitor"}</strong>
+          <strong style="font-size:0.9rem;">${th.senderName || "Visitor"}</strong>
           <span style="display:flex; gap:5px; align-items:center;">
-            ${(t.demo && isOwnerView()) ? '<span class="badge demo" style="font-size:0.6rem;">DEMO</span>' : ""}
-            <span class="badge ${t.senderType === "user" ? "paid" : ""}" style="font-size:0.62rem;">${t.senderType === "user" ? "Registered" : "Guest"}</span>
+            ${(th.demo && isOwnerView()) ? '<span class="badge demo" style="font-size:0.6rem;">DEMO</span>' : ""}
+            <span class="badge ${th.senderType === "user" ? "paid" : ""}" style="font-size:0.62rem;">${th.senderType === "user" ? "Registered" : "Guest"}</span>
           </span>
         </div>
-        <div style="font-family:var(--font-mono); font-size:0.72rem; color:var(--muted); margin-top:3px;">${t.kind === "listing" ? `Re: ${t.listingLabel || "a listing"}` : "General"}</div>
+        <div style="font-family:var(--font-mono); font-size:0.72rem; color:var(--muted); margin-top:3px;">${th.kind === "listing" ? `Re: ${th.listingLabel || "a listing"}` : "General"}</div>
         <div style="font-size:0.82rem; color:var(--muted); margin-top:4px; display:flex; justify-content:space-between; align-items:center; gap:8px;">
-          <span style="white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${t.lastText}</span>
-          ${t.unreadCount ? `<span class="badge count" style="flex-shrink:0;">${formatCount(t.unreadCount)}</span>` : ""}
+          <span style="white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${th.lastText}</span>
+          ${th.unreadCount ? `<span class="badge count" style="flex-shrink:0;">${formatCount(th.unreadCount)}</span>` : ""}
         </div>
       </div>
-    `).join("") : `<p style="padding:16px; font-family:var(--font-mono); font-size:0.8rem; color:var(--muted);">No messages yet.</p>`;
+    `).join("") : `<p style="padding:16px; font-family:var(--font-mono); font-size:0.8rem; color:var(--muted);">${t("messages.no_messages")}</p>`;
 
     threadListEl.querySelectorAll(".thread-row").forEach(row => {
       row.addEventListener("click", () => openThread(row.dataset.thread, byThread[row.dataset.thread]));
@@ -995,6 +1058,7 @@ async function renderMessages() {
     activeThreadId = threadId;
     document.querySelectorAll(".thread-row").forEach(r => r.classList.toggle("active", r.dataset.thread === threadId));
     renderThreadDetail(threadId, msgs);
+    document.getElementById("msg-layout")?.classList.add("detail-open");
     // mark incoming messages as read
     msgs.filter(m => m.senderType !== "admin" && !m.read).forEach(m => updateDoc(doc(db, "messages", m.id), { read: true }).catch(() => {}));
   }
@@ -1003,6 +1067,7 @@ async function renderMessages() {
     const detail = document.getElementById("thread-detail");
     const meta = threadMeta(threadId, msgs);
     detail.innerHTML = `
+      <button type="button" class="btn outline small thread-back-btn" id="thread-back-btn">${getLang() === "pt" ? "← Voltar" : "← Back"}</button>
       <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:14px;">
         <div>
           <h3 style="text-transform:none; font-family:var(--font-body); font-size:1.05rem; margin:0;">${meta.senderName || "Visitor"}
@@ -1022,12 +1087,16 @@ async function renderMessages() {
       </div>
       <p class="typing-indicator" id="typing-indicator"></p>
       <form id="reply-form" style="display:flex; gap:8px;">
-        <input id="reply-input" type="text" placeholder="Reply…" style="flex:1; padding:10px 12px; background:var(--panel-2); border:1px solid var(--line); color:var(--parchment);">
-        <button class="btn" type="submit">Send</button>
+        <input id="reply-input" type="text" placeholder="${t("messages.reply_placeholder")}" style="flex:1; padding:10px 12px; background:var(--panel-2); border:1px solid var(--line); color:var(--parchment);">
+        <button class="btn" type="submit">${t("common.send")}</button>
       </form>`;
 
     const transcriptEl = document.getElementById("thread-transcript");
     transcriptEl.scrollTop = transcriptEl.scrollHeight;
+
+    document.getElementById("thread-back-btn").addEventListener("click", () => {
+      document.getElementById("msg-layout")?.classList.remove("detail-open");
+    });
 
     // Subscribe to this thread's typing status once per thread — the
     // messages listener above re-runs renderThreadDetail on every new
@@ -1039,9 +1108,9 @@ async function renderMessages() {
       typingUnsub = onSnapshot(doc(db, "typingStatus", threadId), (snap) => {
         const indicatorEl = document.getElementById("typing-indicator");
         if (!indicatorEl) return; // thread panel has moved on
-        const t = snap.data();
-        const fresh = t?.guestTypingAt && (Date.now() - (t.guestTypingAt.toMillis?.() || 0) < 8000);
-        indicatorEl.textContent = (t?.guestTyping && fresh) ? `${meta.senderName || "Visitor"} is typing…` : "";
+        const typingData = snap.data();
+        const fresh = typingData?.guestTypingAt && (Date.now() - (typingData.guestTypingAt.toMillis?.() || 0) < 8000);
+        indicatorEl.textContent = (typingData?.guestTyping && fresh) ? t("messages.is_typing").replace("{name}", meta.senderName || "Visitor") : "";
       }, () => {});
     }
 

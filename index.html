@@ -20,11 +20,15 @@
 
 <!-- LOGIN SCREEN -->
 <div class="login-screen" id="login-screen">
+  <select class="lang-switch-select" id="lang-switch-login" style="position:absolute; top:20px; right:20px;">
+    <option value="en">EN</option>
+    <option value="pt">PT</option>
+  </select>
   <form class="login-card" id="login-form">
-    <div class="admin-brand">Asante &amp; Grove<small>Backstage</small></div>
-    <div class="field" style="margin-top:20px;"><label for="a-email">Email</label><input id="a-email" type="email" required></div>
-    <div class="field"><label for="a-pass">Password</label><input id="a-pass" type="password" required></div>
-    <button class="btn" style="width:100%;" type="submit">Sign in</button>
+    <div class="admin-brand">Asante &amp; Grove<small data-i18n="brand.subtitle">Backstage</small></div>
+    <div class="field" style="margin-top:20px;"><label for="a-email" data-i18n="login.email">Email</label><input id="a-email" type="email" required></div>
+    <div class="field"><label for="a-pass" data-i18n="login.password">Password</label><input id="a-pass" type="password" required></div>
+    <button class="btn" style="width:100%;" type="submit" data-i18n="login.submit">Sign in</button>
     <p id="login-error" style="color:var(--rust); font-family:var(--font-mono); font-size:0.78rem; margin-top:12px; display:none;"></p>
   </form>
 </div>
@@ -32,27 +36,31 @@
 <!-- DASHBOARD (hidden until authenticated + whitelisted) -->
 <div id="dashboard" style="display:none;">
   <header class="admin-header">
-    <div style="display:flex; align-items:center; gap:14px;">
+    <div class="header-left">
       <button class="menu-toggle" id="menu-toggle" aria-label="Open menu">☰</button>
-      <div class="admin-brand">Asante &amp; Grove<small>Backstage</small></div>
+      <div class="admin-brand">Asante &amp; Grove<small data-i18n="brand.subtitle">Backstage</small></div>
     </div>
-    <div style="display:flex; align-items:center; gap:16px;">
+    <div class="header-right">
+      <select class="lang-switch-select" id="lang-switch-header">
+        <option value="en">EN</option>
+        <option value="pt">PT</option>
+      </select>
       <span id="signed-in-as" style="font-family:var(--font-mono); font-size:0.78rem; color:var(--muted);"></span>
-      <button class="btn outline small" id="enable-push-btn">Enable notifications</button>
-      <button class="btn outline small" id="logout-btn">Sign out</button>
+      <button class="btn outline small" id="enable-push-btn" data-i18n="header.enable_push">Enable notifications</button>
+      <button class="btn outline small" id="logout-btn" data-i18n="header.signout">Sign out</button>
     </div>
   </header>
   <div class="sidebar-overlay" id="sidebar-overlay"></div>
   <div class="layout">
     <nav class="sidebar" id="sidebar">
-      <button class="tab-btn active" data-tab="listings">Listings</button>
-      <button class="tab-btn" data-tab="agents">Agents</button>
-      <button class="tab-btn" data-tab="enquiries">Enquiries</button>
-      <button class="tab-btn" data-tab="bookings">Bookings &amp; BTC</button>
-      <button class="tab-btn" data-tab="reviews">Reviews</button>
-      <button class="tab-btn" data-tab="messages">Messages<span class="tab-badge badge count" id="messages-tab-badge" style="display:none;"></span></button>
-      <button class="tab-btn" data-tab="settings">Settings</button>
-      <button class="tab-btn" data-tab="staff" id="staff-tab-btn" style="display:none;">Staff</button>
+      <button class="tab-btn active" data-tab="listings"><span data-i18n="nav.listings">Listings</span></button>
+      <button class="tab-btn" data-tab="agents"><span data-i18n="nav.agents">Agents</span></button>
+      <button class="tab-btn" data-tab="enquiries"><span data-i18n="nav.enquiries">Enquiries</span></button>
+      <button class="tab-btn" data-tab="bookings"><span data-i18n="nav.bookings">Bookings &amp; BTC</span></button>
+      <button class="tab-btn" data-tab="reviews"><span data-i18n="nav.reviews">Reviews</span></button>
+      <button class="tab-btn" data-tab="messages"><span data-i18n="nav.messages">Messages</span><span class="tab-badge badge count" id="messages-tab-badge" style="display:none;"></span></button>
+      <button class="tab-btn" data-tab="settings"><span data-i18n="nav.settings">Settings</span></button>
+      <button class="tab-btn" data-tab="staff" id="staff-tab-btn" style="display:none;"><span data-i18n="nav.staff">Staff</span></button>
     </nav>
     <main class="main" id="main">
       <!-- panels injected by admin.js -->

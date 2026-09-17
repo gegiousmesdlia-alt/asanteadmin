@@ -15,19 +15,22 @@
   --font-mono: 'IBM Plex Mono', monospace;
 }
 *{ box-sizing:border-box; }
-html{ touch-action: manipulation; }
+html{ touch-action: manipulation; overflow-x: hidden; }
 body{
   margin:0; background: var(--ink); color: var(--parchment);
   font-family: var(--font-body); line-height:1.5;
   touch-action: manipulation;
+  overflow-x: hidden; /* belt-and-suspenders: no element should ever be able to force a horizontal page scroll */
 }
 a{ color:inherit; }
 .wrap{ max-width: 1240px; margin:0 auto; padding: 0 26px; }
 
 .admin-header{
-  display:flex; align-items:center; justify-content:space-between;
-  height:70px; border-bottom:1px solid var(--line); padding: 0 26px;
+  display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap;
+  min-height:70px; border-bottom:1px solid var(--line); padding: 12px 26px; gap:10px 16px;
 }
+.header-left{ display:flex; align-items:center; gap:14px; }
+.header-right{ display:flex; align-items:center; gap:16px; flex-wrap:wrap; }
 .admin-brand{ font-family:var(--font-display); font-weight:900; text-transform:uppercase; font-size:1.25rem; letter-spacing:0.02em; }
 .admin-brand small{ font-family:var(--font-mono); font-size:0.6rem; color:var(--brass); display:block; letter-spacing:0.14em; }
 
@@ -68,7 +71,7 @@ a{ color:inherit; }
 
 .modal-backdrop{ position:fixed; inset:0; background:rgba(0,0,0,0.6); display:flex; align-items:flex-start; justify-content:center; padding:40px 20px; overflow:auto; z-index:60; }
 .modal{ background: var(--panel); border:1px solid var(--line); padding:26px; max-width:640px; width:100%; }
-.login-screen{ min-height:100vh; display:flex; align-items:center; justify-content:center; }
+.login-screen{ min-height:100vh; display:flex; align-items:center; justify-content:center; position:relative; }
 .login-card{ background: var(--panel); border:1px solid var(--line); padding:34px; width:340px; }
 
 .demo-banner{
@@ -91,6 +94,11 @@ a{ color:inherit; }
 .sidebar button{ display:flex; align-items:center; justify-content:space-between; }
 .panel{ overflow-x:auto; }
 
+.lang-switch-select{
+  background: var(--panel-2); color: var(--parchment); border:1px solid var(--line);
+  font-family: var(--font-mono); font-size:0.78rem; padding:6px 8px; cursor:pointer;
+}
+
 /* Two-column message/inbox layout as a real class (not an inline style) so
    the media query below can collapse it on phones. */
 .msg-layout{ display:grid; grid-template-columns:320px 1fr; gap:20px; align-items:start; }
@@ -108,6 +116,10 @@ a{ color:inherit; }
   .layout{ grid-template-columns: 1fr; }
   .menu-toggle{ display:inline-block; }
   .admin-brand{ font-size:1.05rem; }
+  .admin-header{ padding: 10px 14px; }
+  .header-right{ gap:8px; }
+  #signed-in-as{ display:none; } /* the sign-out button already covers "who am I" well enough; the email just crowds a narrow header */
+  .lang-switch-select{ padding:6px; font-size:0.72rem; }
   .sidebar{
     position:fixed; top:0; left:0; bottom:0; width:250px; z-index:80;
     background:var(--ink); overflow-y:auto; padding-top:82px;
@@ -123,5 +135,17 @@ a{ color:inherit; }
   .modal-backdrop{ padding:16px; }
   .modal{ padding:18px; }
   .msg-layout{ grid-template-columns:1fr; }
+  /* Without .detail-open, only the thread list shows (full width) —
+     tapping a thread adds .detail-open via JS, swapping to show only the
+     detail panel with a back button at its top. This is what makes it
+     feel like a WhatsApp-style conversation screen instead of both panels
+     being stacked and scrolled through together. */
+  .msg-layout:not(.detail-open) .thread-detail-panel{ display:none; }
+  .msg-layout.detail-open .thread-list-panel{ display:none; }
+  .msg-layout.detail-open .thread-detail-panel{ max-height:none; }
+  .thread-back-btn{ display:inline-block; margin-bottom:14px; }
   .toolbar{ flex-wrap:wrap; gap:10px; }
+}
+@media (min-width: 861px){
+  .thread-back-btn{ display:none; } /* both panels already show side by side — nothing to "go back" from */
 }
